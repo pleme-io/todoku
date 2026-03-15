@@ -77,14 +77,69 @@ impl RetryPolicy {
 mod tests {
     use super::*;
 
+    // --- Default policy ---
+
     #[test]
     fn default_policy() {
         let p = RetryPolicy::default();
         assert_eq!(p.max_retries, 3);
+        assert_eq!(p.initial_backoff, Duration::from_millis(500));
+        assert_eq!(p.max_backoff, Duration::from_secs(30));
+        assert_eq!(p.multiplier, 2.0);
         assert!(p.should_retry_status(429));
         assert!(p.should_retry_status(503));
         assert!(!p.should_retry_status(404));
     }
+
+    #[test]
+    fn default_retry_statuses() {
+        let p = RetryPolicy::default();
+        let expected = [429, 500, 502, 503, 504];
+        for status in expected {
+            assert!(
+                p.should_retry_status(status),
+                "expected {status} to be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn non_retryable_statuses() {
+        let p = RetryPolicy::default();
+        let non_retryable = [200, 201, 301, 400, 401, 403, 404, 405, 409, 422];
+        for status in non_retryable {
+            assert!(
+                !p.should_retry_status(status),
+                "expected {status} to NOT be retryable"
+            );
+        }
+    }
+
+    // --- None policy ---
+
+    #[test]
+    fn none_policy() {
+        let p = RetryPolicy::none();
+        assert_eq!(p.max_retries, 0);
+        // Other fields still come from default
+        assert_eq!(p.initial_backoff, Duration::from_millis(500));
+        assert_eq!(p.multiplier, 2.0);
+    }
+
+    // --- Aggressive policy ---
+
+    #[test]
+    fn aggressive_policy() {
+        let p = RetryPolicy::aggressive();
+        assert_eq!(p.max_retries, 5);
+        assert_eq!(p.initial_backoff, Duration::from_millis(200));
+        assert_eq!(p.max_backoff, Duration::from_secs(60));
+        assert_eq!(p.multiplier, 2.0);
+        assert!(p.should_retry_status(429));
+        assert!(p.should_retry_status(504));
+    }
+
+    // --- Exponential backoff ---
 
     #[test]
     fn exponential_backoff() {
@@ -92,6 +147,7 @@ mod tests {
         assert_eq!(p.backoff_for(0), Duration::from_millis(500));
         assert_eq!(p.backoff_for(1), Duration::from_millis(1000));
         assert_eq!(p.backoff_for(2), Duration::from_millis(2000));
+        assert_eq!(p.backoff_for(3), Duration::from_millis(4000));
     }
 
     #[test]
@@ -100,12 +156,175 @@ mod tests {
             max_backoff: Duration::from_secs(1),
             ..Default::default()
         };
+        // Attempt 10: 500ms * 2^10 = 512000ms, clamped to 1000ms
         assert_eq!(p.backoff_for(10), Duration::from_secs(1));
     }
 
     #[test]
-    fn none_policy() {
-        let p = RetryPolicy::none();
-        assert_eq!(p.max_retries, 0);
+    fn backoff_at_boundary_of_max() {
+        let p = RetryPolicy {
+            initial_backoff: Duration::from_millis(1000),
+            max_backoff: Duration::from_millis(4000),
+            multiplier: 2.0,
+            ..Default::default()
+        };
+        // attempt 0: 1000ms
+        assert_eq!(p.backoff_for(0), Duration::from_millis(1000));
+        // attempt 1: 2000ms
+        assert_eq!(p.backoff_for(1), Duration::from_millis(2000));
+        // attempt 2: 4000ms (exactly at max)
+        assert_eq!(p.backoff_for(2), Duration::from_millis(4000));
+        // attempt 3: 8000ms clamped to 4000ms
+        assert_eq!(p.backoff_for(3), Duration::from_millis(4000));
+    }
+
+    #[test]
+    fn backoff_aggressive_policy_values() {
+        let p = RetryPolicy::aggressive();
+        // 200ms * 2^0 = 200ms
+        assert_eq!(p.backoff_for(0), Duration::from_millis(200));
+        // 200ms * 2^1 = 400ms
+        assert_eq!(p.backoff_for(1), Duration::from_millis(400));
+        // 200ms * 2^2 = 800ms
+        assert_eq!(p.backoff_for(2), Duration::from_millis(800));
+    }
+
+    #[test]
+    fn backoff_with_multiplier_of_one() {
+        let p = RetryPolicy {
+            initial_backoff: Duration::from_millis(100),
+            multiplier: 1.0,
+            ..Default::default()
+        };
+        // With multiplier 1.0, backoff is always initial_backoff
+        assert_eq!(p.backoff_for(0), Duration::from_millis(100));
+        assert_eq!(p.backoff_for(1), Duration::from_millis(100));
+        assert_eq!(p.backoff_for(5), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn backoff_with_fractional_multiplier() {
+        let p = RetryPolicy {
+            initial_backoff: Duration::from_millis(1000),
+            max_backoff: Duration::from_secs(60),
+            multiplier: 1.5,
+            ..Default::default()
+        };
+        // attempt 0: 1000ms * 1.5^0 = 1000ms
+        assert_eq!(p.backoff_for(0), Duration::from_millis(1000));
+        // attempt 1: 1000ms * 1.5^1 = 1500ms
+        assert_eq!(p.backoff_for(1), Duration::from_millis(1500));
+        // attempt 2: 1000ms * 1.5^2 = 2250ms
+        assert_eq!(p.backoff_for(2), Duration::from_millis(2250));
+    }
+
+    // --- Custom retry statuses ---
+
+    #[test]
+    fn custom_retry_statuses() {
+        let p = RetryPolicy {
+            retry_statuses: vec![418, 503],
+            ..Default::default()
+        };
+        assert!(p.should_retry_status(418));
+        assert!(p.should_retry_status(503));
+        assert!(!p.should_retry_status(429));
+        assert!(!p.should_retry_status(500));
+    }
+
+    #[test]
+    fn empty_retry_statuses() {
+        let p = RetryPolicy {
+            retry_statuses: vec![],
+            ..Default::default()
+        };
+        assert!(!p.should_retry_status(429));
+        assert!(!p.should_retry_status(500));
+        assert!(!p.should_retry_status(503));
+    }
+
+    // --- Serde round-trip ---
+
+    #[test]
+    fn serde_round_trip_default() {
+        let original = RetryPolicy::default();
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: RetryPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.max_retries, original.max_retries);
+        assert_eq!(restored.initial_backoff, original.initial_backoff);
+        assert_eq!(restored.max_backoff, original.max_backoff);
+        assert_eq!(restored.multiplier, original.multiplier);
+        assert_eq!(restored.retry_statuses, original.retry_statuses);
+    }
+
+    #[test]
+    fn serde_round_trip_aggressive() {
+        let original = RetryPolicy::aggressive();
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: RetryPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.max_retries, original.max_retries);
+        assert_eq!(restored.initial_backoff, original.initial_backoff);
+    }
+
+    #[test]
+    fn serde_round_trip_none() {
+        let original = RetryPolicy::none();
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: RetryPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.max_retries, 0);
+    }
+
+    #[test]
+    fn serde_deserialize_partial_json_uses_defaults() {
+        // Only specifying max_retries; everything else should use defaults
+        let json = r#"{"max_retries": 10}"#;
+        let p: RetryPolicy = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(p.max_retries, 10);
+        // Check defaults are applied for missing fields
+        assert_eq!(p.initial_backoff, Duration::from_millis(500));
+        assert_eq!(p.max_backoff, Duration::from_secs(30));
+        assert_eq!(p.multiplier, 2.0);
+        assert_eq!(p.retry_statuses, vec![429, 500, 502, 503, 504]);
+    }
+
+    #[test]
+    fn serde_deserialize_empty_json_uses_all_defaults() {
+        let json = "{}";
+        let p: RetryPolicy = serde_json::from_str(json).expect("deserialize");
+        let d = RetryPolicy::default();
+        assert_eq!(p.max_retries, d.max_retries);
+        assert_eq!(p.initial_backoff, d.initial_backoff);
+        assert_eq!(p.max_backoff, d.max_backoff);
+        assert_eq!(p.multiplier, d.multiplier);
+        assert_eq!(p.retry_statuses, d.retry_statuses);
+    }
+
+    // --- Clone ---
+
+    #[test]
+    fn clone_preserves_all_fields() {
+        let original = RetryPolicy {
+            max_retries: 7,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(5),
+            multiplier: 3.0,
+            retry_statuses: vec![418, 503],
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.max_retries, 7);
+        assert_eq!(cloned.initial_backoff, Duration::from_millis(100));
+        assert_eq!(cloned.max_backoff, Duration::from_secs(5));
+        assert_eq!(cloned.multiplier, 3.0);
+        assert_eq!(cloned.retry_statuses, vec![418, 503]);
+    }
+
+    // --- Debug ---
+
+    #[test]
+    fn debug_format_is_non_empty() {
+        let p = RetryPolicy::default();
+        let debug = format!("{p:?}");
+        assert!(debug.contains("RetryPolicy"));
+        assert!(debug.contains("max_retries"));
     }
 }

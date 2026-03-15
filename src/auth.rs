@@ -112,6 +112,31 @@ impl Auth for HeaderAuth {
 mod tests {
     use super::*;
 
+    // --- NoAuth ---
+
+    #[test]
+    fn no_auth_noop() {
+        let auth = NoAuth;
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn no_auth_preserves_existing_headers() {
+        let auth = NoAuth;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-existing"),
+            HeaderValue::from_static("keep-me"),
+        );
+        auth.apply(&mut headers);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers.get("x-existing").unwrap(), "keep-me");
+    }
+
+    // --- BearerToken ---
+
     #[test]
     fn bearer_token_applies() {
         let auth = BearerToken::new("test-token-123");
@@ -124,12 +149,144 @@ mod tests {
     }
 
     #[test]
-    fn no_auth_noop() {
-        let auth = NoAuth;
+    fn bearer_token_from_string_owned() {
+        let token = String::from("owned-token");
+        let auth = BearerToken::new(token);
         let mut headers = HeaderMap::new();
         auth.apply(&mut headers);
-        assert!(headers.is_empty());
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer owned-token"
+        );
     }
+
+    #[test]
+    fn bearer_token_empty_string() {
+        let auth = BearerToken::new("");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer "
+        );
+    }
+
+    #[test]
+    fn bearer_token_overwrites_existing_authorization() {
+        let auth = BearerToken::new("new-token");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer old-token"),
+        );
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer new-token"
+        );
+    }
+
+    // --- BasicAuth ---
+
+    #[test]
+    fn basic_auth_encodes_correctly() {
+        // "user:pass" base64 = "dXNlcjpwYXNz"
+        let auth = BasicAuth::new("user", "pass");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Basic dXNlcjpwYXNz"
+        );
+    }
+
+    #[test]
+    fn basic_auth_empty_password() {
+        // "user:" base64 = "dXNlcjo="
+        let auth = BasicAuth::new("user", "");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Basic dXNlcjo="
+        );
+    }
+
+    #[test]
+    fn basic_auth_empty_username() {
+        // ":pass" base64 = "OnBhc3M="
+        let auth = BasicAuth::new("", "pass");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Basic OnBhc3M="
+        );
+    }
+
+    #[test]
+    fn basic_auth_both_empty() {
+        // ":" base64 = "Og=="
+        let auth = BasicAuth::new("", "");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Basic Og=="
+        );
+    }
+
+    #[test]
+    fn basic_auth_special_characters() {
+        // Verify we can encode credentials with special chars
+        let auth = BasicAuth::new("admin@example.com", "p@ss:w0rd!");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        let value = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(value.starts_with("Basic "));
+        // Manually verify: "admin@example.com:p@ss:w0rd!" in base64
+        assert_eq!(value, "Basic YWRtaW5AZXhhbXBsZS5jb206cEBzczp3MHJkIQ==");
+    }
+
+    #[test]
+    fn base64_encode_empty_input() {
+        let result = BasicAuth::base64_encode(b"");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn base64_encode_single_byte() {
+        // 'A' = 0x41 -> base64 = "QQ=="
+        let result = BasicAuth::base64_encode(b"A");
+        assert_eq!(result, "QQ==");
+    }
+
+    #[test]
+    fn base64_encode_two_bytes() {
+        // 'AB' -> base64 = "QUI="
+        let result = BasicAuth::base64_encode(b"AB");
+        assert_eq!(result, "QUI=");
+    }
+
+    #[test]
+    fn base64_encode_three_bytes() {
+        // 'ABC' -> base64 = "QUJD" (no padding)
+        let result = BasicAuth::base64_encode(b"ABC");
+        assert_eq!(result, "QUJD");
+    }
+
+    #[test]
+    fn base64_encode_longer_input() {
+        // "Hello, World!" -> "SGVsbG8sIFdvcmxkIQ=="
+        let result = BasicAuth::base64_encode(b"Hello, World!");
+        assert_eq!(result, "SGVsbG8sIFdvcmxkIQ==");
+    }
+
+    // --- HeaderAuth ---
 
     #[test]
     fn header_auth_custom() {
@@ -137,5 +294,85 @@ mod tests {
         let mut headers = HeaderMap::new();
         auth.apply(&mut headers);
         assert_eq!(headers.get("x-api-key").unwrap(), "my-secret-key");
+    }
+
+    #[test]
+    fn header_auth_authorization_header() {
+        // HeaderAuth can also be used for custom Authorization schemes
+        let auth = HeaderAuth::new(reqwest::header::AUTHORIZATION, "Token abc123");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Token abc123"
+        );
+    }
+
+    #[test]
+    fn header_auth_empty_value() {
+        let auth = HeaderAuth::new(HeaderName::from_static("x-api-key"), "");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(headers.get("x-api-key").unwrap(), "");
+    }
+
+    #[test]
+    fn header_auth_overwrites_same_header() {
+        let auth = HeaderAuth::new(HeaderName::from_static("x-api-key"), "new-key");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("old-key"),
+        );
+        auth.apply(&mut headers);
+        assert_eq!(headers.get("x-api-key").unwrap(), "new-key");
+    }
+
+    #[test]
+    fn header_auth_does_not_affect_other_headers() {
+        let auth = HeaderAuth::new(HeaderName::from_static("x-api-key"), "secret");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-other"),
+            HeaderValue::from_static("untouched"),
+        );
+        auth.apply(&mut headers);
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.get("x-other").unwrap(), "untouched");
+        assert_eq!(headers.get("x-api-key").unwrap(), "secret");
+    }
+
+    // --- Auth trait object usage ---
+
+    #[test]
+    fn auth_trait_object_bearer() {
+        let auth: Box<dyn Auth> = Box::new(BearerToken::new("dynamic"));
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer dynamic"
+        );
+    }
+
+    #[test]
+    fn auth_trait_object_basic() {
+        let auth: Box<dyn Auth> = Box::new(BasicAuth::new("user", "pass"));
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        let value = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(value.starts_with("Basic "));
+    }
+
+    #[test]
+    fn auth_trait_object_no_auth() {
+        let auth: Box<dyn Auth> = Box::new(NoAuth);
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert!(headers.is_empty());
     }
 }

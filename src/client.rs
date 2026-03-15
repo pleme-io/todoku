@@ -266,9 +266,13 @@ impl HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::{BasicAuth, BearerToken, HeaderAuth};
+    use reqwest::header::HeaderName;
+
+    // --- URL resolution ---
 
     #[test]
-    fn url_resolution() {
+    fn url_resolution_with_leading_slash() {
         let client = HttpClient {
             inner: reqwest::Client::new(),
             base_url: Some("https://api.example.com/v1".into()),
@@ -277,6 +281,17 @@ mod tests {
             default_headers: HeaderMap::new(),
         };
         assert_eq!(client.url("/items"), "https://api.example.com/v1/items");
+    }
+
+    #[test]
+    fn url_resolution_without_leading_slash() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com/v1".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
         assert_eq!(client.url("items"), "https://api.example.com/v1/items");
     }
 
@@ -292,6 +307,433 @@ mod tests {
         assert_eq!(
             client.url("https://example.com/api"),
             "https://example.com/api"
+        );
+    }
+
+    #[test]
+    fn url_base_with_trailing_slash() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com/v1/".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        // Trailing slash on base and leading slash on path should not double-slash
+        assert_eq!(client.url("/items"), "https://api.example.com/v1/items");
+    }
+
+    #[test]
+    fn url_base_with_trailing_slash_path_no_leading() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com/v1/".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(client.url("items"), "https://api.example.com/v1/items");
+    }
+
+    #[test]
+    fn url_empty_path() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(client.url(""), "https://api.example.com/");
+    }
+
+    #[test]
+    fn url_nested_path() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(
+            client.url("/a/b/c/d"),
+            "https://api.example.com/a/b/c/d"
+        );
+    }
+
+    #[test]
+    fn url_with_query_params() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com/v1".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(
+            client.url("/search?q=hello&page=1"),
+            "https://api.example.com/v1/search?q=hello&page=1"
+        );
+    }
+
+    #[test]
+    fn url_no_base_returns_path_as_is() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: None,
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(client.url("/relative/path"), "/relative/path");
+    }
+
+    #[test]
+    fn url_empty_base() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some(String::new()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        assert_eq!(client.url("/items"), "/items");
+    }
+
+    #[test]
+    fn url_base_multiple_trailing_slashes() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com///".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        // trim_end_matches('/') removes all trailing slashes
+        assert_eq!(
+            client.url("/items"),
+            "https://api.example.com/items"
+        );
+    }
+
+    #[test]
+    fn url_path_multiple_leading_slashes() {
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+            base_url: Some("https://api.example.com".into()),
+            auth: Arc::new(NoAuth),
+            retry: RetryPolicy::none(),
+            default_headers: HeaderMap::new(),
+        };
+        // trim_start_matches('/') removes all leading slashes from path
+        assert_eq!(
+            client.url("///items"),
+            "https://api.example.com/items"
+        );
+    }
+
+    // --- Builder defaults ---
+
+    #[test]
+    fn builder_default_no_base_url() {
+        let client = HttpClient::builder().build().unwrap();
+        assert!(client.base_url.is_none());
+    }
+
+    #[test]
+    fn builder_default_no_auth() {
+        let client = HttpClient::builder().build().unwrap();
+        // NoAuth should leave headers empty
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn builder_default_retry_policy() {
+        let client = HttpClient::builder().build().unwrap();
+        assert_eq!(client.retry.max_retries, 3);
+    }
+
+    #[test]
+    fn builder_default_headers_empty() {
+        let client = HttpClient::builder().build().unwrap();
+        assert!(client.default_headers.is_empty());
+    }
+
+    // --- Builder with base_url ---
+
+    #[test]
+    fn builder_sets_base_url_from_str() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.base_url.as_deref(),
+            Some("https://api.example.com")
+        );
+    }
+
+    #[test]
+    fn builder_sets_base_url_from_string() {
+        let url = String::from("https://api.example.com");
+        let client = HttpClient::builder().base_url(url).build().unwrap();
+        assert_eq!(
+            client.base_url.as_deref(),
+            Some("https://api.example.com")
+        );
+    }
+
+    #[test]
+    fn builder_base_url_last_wins() {
+        let client = HttpClient::builder()
+            .base_url("https://first.com")
+            .base_url("https://second.com")
+            .build()
+            .unwrap();
+        assert_eq!(client.base_url.as_deref(), Some("https://second.com"));
+    }
+
+    // --- Builder with auth ---
+
+    #[test]
+    fn builder_sets_bearer_auth() {
+        let client = HttpClient::builder()
+            .auth(BearerToken::new("my-token"))
+            .build()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer my-token"
+        );
+    }
+
+    #[test]
+    fn builder_sets_basic_auth() {
+        let client = HttpClient::builder()
+            .auth(BasicAuth::new("user", "pass"))
+            .build()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        let val = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(val.starts_with("Basic "));
+    }
+
+    #[test]
+    fn builder_sets_header_auth() {
+        let client = HttpClient::builder()
+            .auth(HeaderAuth::new(
+                HeaderName::from_static("x-api-key"),
+                "secret",
+            ))
+            .build()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        assert_eq!(headers.get("x-api-key").unwrap(), "secret");
+    }
+
+    #[test]
+    fn builder_auth_last_wins() {
+        let client = HttpClient::builder()
+            .auth(BearerToken::new("first"))
+            .auth(BearerToken::new("second"))
+            .build()
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer second"
+        );
+    }
+
+    // --- Builder with retry ---
+
+    #[test]
+    fn builder_sets_retry_none() {
+        let client = HttpClient::builder()
+            .retry(RetryPolicy::none())
+            .build()
+            .unwrap();
+        assert_eq!(client.retry.max_retries, 0);
+    }
+
+    #[test]
+    fn builder_sets_retry_aggressive() {
+        let client = HttpClient::builder()
+            .retry(RetryPolicy::aggressive())
+            .build()
+            .unwrap();
+        assert_eq!(client.retry.max_retries, 5);
+    }
+
+    #[test]
+    fn builder_sets_custom_retry() {
+        let policy = RetryPolicy {
+            max_retries: 10,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(5),
+            multiplier: 1.5,
+            retry_statuses: vec![503],
+        };
+        let client = HttpClient::builder().retry(policy).build().unwrap();
+        assert_eq!(client.retry.max_retries, 10);
+        assert_eq!(client.retry.initial_backoff, Duration::from_millis(100));
+        assert_eq!(client.retry.multiplier, 1.5);
+        assert!(client.retry.should_retry_status(503));
+        assert!(!client.retry.should_retry_status(429));
+    }
+
+    // --- Builder with timeout ---
+
+    #[test]
+    fn builder_sets_timeout() {
+        // We can't directly inspect the reqwest Client's timeout,
+        // but we verify the builder chain compiles and builds successfully.
+        let client = HttpClient::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap();
+        // Client was built successfully with custom timeout
+        assert!(client.base_url.is_none());
+    }
+
+    // --- Builder with user_agent ---
+
+    #[test]
+    fn builder_sets_user_agent() {
+        // Similar to timeout, we verify the builder chain works.
+        let client = HttpClient::builder()
+            .user_agent("my-app/1.0")
+            .build()
+            .unwrap();
+        assert!(client.base_url.is_none());
+    }
+
+    // --- Builder with default headers ---
+
+    #[test]
+    fn builder_sets_custom_header() {
+        let client = HttpClient::builder()
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json",
+            )
+            .build()
+            .unwrap();
+        assert_eq!(
+            client
+                .default_headers
+                .get(reqwest::header::ACCEPT)
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn builder_sets_multiple_headers() {
+        let client = HttpClient::builder()
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                HeaderName::from_static("x-request-id"),
+                "abc-123",
+            )
+            .build()
+            .unwrap();
+        assert_eq!(client.default_headers.len(), 2);
+        assert_eq!(
+            client
+                .default_headers
+                .get(reqwest::header::ACCEPT)
+                .unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            client.default_headers.get("x-request-id").unwrap(),
+            "abc-123"
+        );
+    }
+
+    // --- Builder full chain ---
+
+    #[test]
+    fn builder_full_chain() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com/v2")
+            .auth(BearerToken::new("token123"))
+            .retry(RetryPolicy::aggressive())
+            .timeout(Duration::from_secs(10))
+            .user_agent("test-agent/0.1")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            client.base_url.as_deref(),
+            Some("https://api.example.com/v2")
+        );
+        assert_eq!(client.retry.max_retries, 5);
+
+        let mut headers = HeaderMap::new();
+        client.auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer token123"
+        );
+    }
+
+    // --- HttpClient::builder() static method ---
+
+    #[test]
+    fn static_builder_method() {
+        // Ensure HttpClient::builder() returns a working builder
+        let builder = HttpClient::builder();
+        let client = builder.build().unwrap();
+        assert!(client.base_url.is_none());
+    }
+
+    // --- Clone ---
+
+    #[test]
+    fn client_is_cloneable() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com")
+            .retry(RetryPolicy::aggressive())
+            .build()
+            .unwrap();
+        let cloned = client.clone();
+        assert_eq!(cloned.base_url, client.base_url);
+        assert_eq!(cloned.retry.max_retries, client.retry.max_retries);
+    }
+
+    // --- URL resolution with built client ---
+
+    #[test]
+    fn built_client_url_resolution() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com/v1")
+            .build()
+            .unwrap();
+        assert_eq!(client.url("/users"), "https://api.example.com/v1/users");
+        assert_eq!(client.url("users"), "https://api.example.com/v1/users");
+    }
+
+    #[test]
+    fn built_client_no_base_url_resolution() {
+        let client = HttpClient::builder().build().unwrap();
+        assert_eq!(
+            client.url("https://other.com/api"),
+            "https://other.com/api"
         );
     }
 }
