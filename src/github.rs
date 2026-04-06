@@ -191,11 +191,25 @@ impl GitHubApi for GitHubClient {
         owner: &str,
         owner_type: OwnerType,
     ) -> Result<Vec<GitHubRepo>, TodokuError> {
-        let path = match owner_type {
-            OwnerType::Org => format!("/orgs/{owner}/repos?per_page=100&type=all"),
-            OwnerType::User => format!("/users/{owner}/repos?per_page=100&type=all"),
+        // GitHub caps `per_page` at 100. Paginate until a short page is returned.
+        const PER_PAGE: u32 = 100;
+        let base = match owner_type {
+            OwnerType::Org => format!("/orgs/{owner}/repos"),
+            OwnerType::User => format!("/users/{owner}/repos"),
         };
-        self.client.get(&path).await
+        let mut all = Vec::new();
+        let mut page: u32 = 1;
+        loop {
+            let path = format!("{base}?per_page={PER_PAGE}&type=all&page={page}");
+            let mut batch: Vec<GitHubRepo> = self.client.get(&path).await?;
+            let len = batch.len();
+            all.append(&mut batch);
+            if len < PER_PAGE as usize {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all)
     }
 
     async fn get_file_info(
