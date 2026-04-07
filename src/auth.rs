@@ -1,6 +1,7 @@
 //! Pluggable authentication strategies for HTTP requests.
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use tracing::warn;
 
 /// Authentication strategy for HTTP requests.
 pub trait Auth: Send + Sync {
@@ -31,8 +32,11 @@ impl BearerToken {
 
 impl Auth for BearerToken {
     fn apply(&self, headers: &mut HeaderMap) {
-        if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", self.token)) {
-            headers.insert(reqwest::header::AUTHORIZATION, val);
+        match HeaderValue::from_str(&format!("Bearer {}", self.token)) {
+            Ok(val) => {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+            Err(e) => warn!("BearerToken: invalid header value: {e}"),
         }
     }
 }
@@ -79,8 +83,11 @@ impl BasicAuth {
 
 impl Auth for BasicAuth {
     fn apply(&self, headers: &mut HeaderMap) {
-        if let Ok(val) = HeaderValue::from_str(&format!("Basic {}", self.encoded)) {
-            headers.insert(reqwest::header::AUTHORIZATION, val);
+        match HeaderValue::from_str(&format!("Basic {}", self.encoded)) {
+            Ok(val) => {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+            Err(e) => warn!("BasicAuth: invalid header value: {e}"),
         }
     }
 }
@@ -104,8 +111,11 @@ impl HeaderAuth {
 
 impl Auth for HeaderAuth {
     fn apply(&self, headers: &mut HeaderMap) {
-        if let Ok(val) = HeaderValue::from_str(&self.value) {
-            headers.insert(self.name.clone(), val);
+        match HeaderValue::from_str(&self.value) {
+            Ok(val) => {
+                headers.insert(self.name.clone(), val);
+            }
+            Err(e) => warn!("HeaderAuth({}): invalid header value: {e}", self.name),
         }
     }
 }
