@@ -28,6 +28,7 @@ pub type Result<T> = std::result::Result<T, TodokuError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use std::time::Duration;
 
     #[test]
@@ -135,5 +136,93 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("422"));
         assert!(msg.contains("validation_failed"));
+    }
+
+    // --- assert_matches tests ---
+
+    #[test]
+    fn assert_matches_http_variant() {
+        let err = TodokuError::Http {
+            status: 429,
+            body: "rate limited".into(),
+        };
+        assert_matches!(err, TodokuError::Http { status: 429, .. });
+    }
+
+    #[test]
+    fn assert_matches_auth_variant() {
+        let err = TodokuError::Auth("invalid token".into());
+        assert_matches!(err, TodokuError::Auth(msg) if msg == "invalid token");
+    }
+
+    #[test]
+    fn assert_matches_max_retries_variant() {
+        let err = TodokuError::MaxRetries {
+            url: "https://api.test.com".into(),
+            max: 5,
+        };
+        assert_matches!(err, TodokuError::MaxRetries { max: 5, .. });
+    }
+
+    #[test]
+    fn assert_matches_timeout_variant() {
+        let err = TodokuError::Timeout(Duration::from_secs(10));
+        assert_matches!(err, TodokuError::Timeout(d) if d == Duration::from_secs(10));
+    }
+
+    #[test]
+    fn assert_matches_deserialize_variant() {
+        let serde_err = serde_json::from_str::<serde_json::Value>("{bad}").unwrap_err();
+        let err: TodokuError = serde_err.into();
+        assert_matches!(err, TodokuError::Deserialize(_));
+    }
+
+    #[test]
+    fn error_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TodokuError>();
+    }
+
+    #[test]
+    fn error_implements_std_error() {
+        let err = TodokuError::Auth("test".into());
+        let std_err: &dyn std::error::Error = &err;
+        assert!(!std_err.to_string().is_empty());
+    }
+
+    #[test]
+    fn http_error_all_status_codes() {
+        for status in [400, 401, 403, 404, 405, 409, 422, 429, 500, 502, 503, 504] {
+            let err = TodokuError::Http {
+                status,
+                body: String::new(),
+            };
+            let msg = format!("{err}");
+            assert!(msg.contains(&status.to_string()));
+        }
+    }
+
+    #[test]
+    fn max_retries_error_large_retry_count() {
+        let err = TodokuError::MaxRetries {
+            url: "https://example.com/api".into(),
+            max: 100,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("100"));
+    }
+
+    #[test]
+    fn timeout_error_zero_duration() {
+        let err = TodokuError::Timeout(Duration::ZERO);
+        let msg = format!("{err}");
+        assert!(msg.contains("0"));
+    }
+
+    #[test]
+    fn auth_error_empty_message() {
+        let err = TodokuError::Auth(String::new());
+        let msg = format!("{err}");
+        assert_eq!(msg, "authentication failed: ");
     }
 }
