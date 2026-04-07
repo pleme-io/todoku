@@ -717,4 +717,219 @@ mod tests {
         assert!(debug.contains("GitHubRepo"));
         assert!(debug.contains("debug-test"));
     }
+
+    // --- Error-returning mock ---
+
+    struct FailingGitHubApi;
+
+    #[async_trait::async_trait]
+    impl GitHubApi for FailingGitHubApi {
+        async fn get_repo_head(&self, _owner: &str, _repo: &str) -> Result<String, TodokuError> {
+            Err(TodokuError::Http {
+                status: 404,
+                body: "Not Found".into(),
+            })
+        }
+
+        async fn get_latest_tag(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> Result<Option<String>, TodokuError> {
+            Err(TodokuError::Http {
+                status: 403,
+                body: "Forbidden".into(),
+            })
+        }
+
+        async fn get_primary_language(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> Result<Option<String>, TodokuError> {
+            Err(TodokuError::Http {
+                status: 500,
+                body: "Internal Server Error".into(),
+            })
+        }
+
+        async fn list_repos(
+            &self,
+            _owner: &str,
+            _owner_type: OwnerType,
+        ) -> Result<Vec<GitHubRepo>, TodokuError> {
+            Err(TodokuError::Auth("bad token".into()))
+        }
+
+        async fn get_file_info(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _path: &str,
+        ) -> Result<FileInfo, TodokuError> {
+            Err(TodokuError::Http {
+                status: 404,
+                body: "file not found".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn failing_mock_get_repo_head() {
+        let api = FailingGitHubApi;
+        let result = api.get_repo_head("org", "repo").await;
+        assert_matches::assert_matches!(
+            result,
+            Err(TodokuError::Http { status: 404, .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_mock_get_latest_tag() {
+        let api = FailingGitHubApi;
+        let result = api.get_latest_tag("org", "repo").await;
+        assert_matches::assert_matches!(
+            result,
+            Err(TodokuError::Http { status: 403, .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_mock_get_primary_language() {
+        let api = FailingGitHubApi;
+        let result = api.get_primary_language("org", "repo").await;
+        assert_matches::assert_matches!(
+            result,
+            Err(TodokuError::Http { status: 500, .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_mock_list_repos() {
+        let api = FailingGitHubApi;
+        let result = api.list_repos("org", OwnerType::Org).await;
+        assert_matches::assert_matches!(result, Err(TodokuError::Auth(_)));
+    }
+
+    #[tokio::test]
+    async fn failing_mock_get_file_info() {
+        let api = FailingGitHubApi;
+        let result = api.get_file_info("org", "repo", "README.md").await;
+        assert_matches::assert_matches!(
+            result,
+            Err(TodokuError::Http { status: 404, .. })
+        );
+    }
+
+    // --- Mock with multiple repos ---
+
+    #[tokio::test]
+    async fn mock_list_repos_multiple() {
+        let mut mock = MockGitHubApi::new();
+        mock.repos = vec![
+            GitHubRepo {
+                name: "repo-a".to_string(),
+                full_name: "org/repo-a".to_string(),
+                default_branch: Some("main".to_string()),
+                language: Some("Rust".to_string()),
+                archived: false,
+                fork: false,
+            },
+            GitHubRepo {
+                name: "repo-b".to_string(),
+                full_name: "org/repo-b".to_string(),
+                default_branch: Some("develop".to_string()),
+                language: Some("Go".to_string()),
+                archived: true,
+                fork: false,
+            },
+            GitHubRepo {
+                name: "repo-c".to_string(),
+                full_name: "org/repo-c".to_string(),
+                default_branch: None,
+                language: None,
+                archived: false,
+                fork: true,
+            },
+        ];
+        let repos = mock.list_repos("org", OwnerType::Org).await.unwrap();
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].name, "repo-a");
+        assert!(repos[1].archived);
+        assert!(repos[2].fork);
+        assert!(repos[2].language.is_none());
+    }
+
+    // --- ContentEntry without download_url ---
+
+    #[test]
+    fn deserialize_content_entry_missing_download_url() {
+        let json = r#"{"sha": "abc", "size": 100}"#;
+        let entry: ContentEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.sha, "abc");
+        assert_eq!(entry.size, 100);
+        assert!(entry.download_url.is_none());
+    }
+
+    // --- OwnerType Copy semantics ---
+
+    #[test]
+    fn owner_type_is_copy() {
+        let a = OwnerType::Org;
+        let b = a;
+        let c = a;
+        assert_eq!(b, c);
+        assert_eq!(a, OwnerType::Org);
+    }
+
+    // --- GitHubRepo default_branch variants ---
+
+    #[test]
+    fn deserialize_repo_default_branch_develop() {
+        let json = r#"{"name": "proj", "default_branch": "develop"}"#;
+        let repo: GitHubRepo = serde_json::from_str(json).unwrap();
+        assert_eq!(repo.default_branch.as_deref(), Some("develop"));
+    }
+
+    #[test]
+    fn deserialize_repo_default_branch_null() {
+        let json = r#"{"name": "proj", "default_branch": null}"#;
+        let repo: GitHubRepo = serde_json::from_str(json).unwrap();
+        assert!(repo.default_branch.is_none());
+    }
+
+    // --- RepoInfo edge cases ---
+
+    #[test]
+    fn deserialize_repo_info_missing_fields() {
+        let json = r#"{}"#;
+        let info: RepoInfo = serde_json::from_str(json).unwrap();
+        assert!(info.default_branch.is_none());
+        assert!(info.language.is_none());
+    }
+
+    // --- BranchRef edge cases ---
+
+    #[test]
+    fn deserialize_branch_ref_long_sha() {
+        let json = r#"{"object": {"sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"}}"#;
+        let br: BranchRef = serde_json::from_str(json).unwrap();
+        assert_eq!(br.object.sha.len(), 40);
+    }
+
+    // --- Tag entry edge cases ---
+
+    #[test]
+    fn deserialize_tag_entry_semver() {
+        let json = r#"{"name": "v2.1.0-beta.3"}"#;
+        let tag: TagEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(tag.name, "v2.1.0-beta.3");
+    }
+
+    #[test]
+    fn deserialize_tag_entry_no_v_prefix() {
+        let json = r#"{"name": "1.0.0"}"#;
+        let tag: TagEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(tag.name, "1.0.0");
+    }
 }
