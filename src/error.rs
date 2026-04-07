@@ -1,3 +1,6 @@
+//! Error types for the todoku HTTP client.
+
+/// Errors that can occur during HTTP operations.
 #[derive(thiserror::Error, Debug)]
 pub enum TodokuError {
     #[error("request failed: {0}")]
@@ -19,6 +22,7 @@ pub enum TodokuError {
     Timeout(std::time::Duration),
 }
 
+/// Convenience alias for `Result<T, TodokuError>`.
 pub type Result<T> = std::result::Result<T, TodokuError>;
 
 #[cfg(test)]

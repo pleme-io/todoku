@@ -1,3 +1,5 @@
+//! Pluggable authentication strategies for HTTP requests.
+
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 /// Authentication strategy for HTTP requests.
@@ -90,6 +92,8 @@ pub struct HeaderAuth {
 }
 
 impl HeaderAuth {
+    /// Create a new custom header authentication.
+    #[must_use]
     pub fn new(name: impl Into<HeaderName>, value: impl Into<String>) -> Self {
         Self {
             name: name.into(),

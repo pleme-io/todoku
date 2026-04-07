@@ -1,3 +1,8 @@
+//! Todoku (届く) — Shared authenticated HTTP client with retry and JSON deserialization.
+//!
+//! Wraps [`reqwest`] so every pleme-io app with API calls uses the same
+//! builder pattern, pluggable auth, and exponential-backoff retry.
+
 pub mod auth;
 pub mod client;
 pub mod error;

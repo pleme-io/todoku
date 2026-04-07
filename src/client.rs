@@ -1,3 +1,5 @@
+//! Core HTTP client with authentication, retry, and JSON deserialization.
+
 use crate::auth::{Auth, NoAuth};
 use crate::error::{Result, TodokuError};
 use crate::retry::RetryPolicy;

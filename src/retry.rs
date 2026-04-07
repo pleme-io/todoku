@@ -1,3 +1,5 @@
+//! Configurable retry policies with exponential backoff.
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
