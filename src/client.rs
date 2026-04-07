@@ -738,4 +738,159 @@ mod tests {
             "https://other.com/api"
         );
     }
+
+    // --- URL resolution edge cases with builder ---
+
+    #[test]
+    fn built_client_url_with_fragment() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.url("/docs#section"),
+            "https://api.example.com/docs#section"
+        );
+    }
+
+    #[test]
+    fn built_client_url_with_port() {
+        let client = HttpClient::builder()
+            .base_url("https://localhost:8080/api")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.url("/health"),
+            "https://localhost:8080/api/health"
+        );
+    }
+
+    // --- Builder method chaining returns correct type ---
+
+    #[test]
+    fn builder_methods_are_chainable() {
+        let _client = HttpClient::builder()
+            .base_url("https://example.com")
+            .auth(BearerToken::new("tok"))
+            .retry(RetryPolicy::none())
+            .timeout(Duration::from_secs(5))
+            .user_agent("test/1.0")
+            .header(reqwest::header::ACCEPT, "text/plain")
+            .header(HeaderName::from_static("x-custom"), "val")
+            .build()
+            .unwrap();
+    }
+
+    // --- Builder default user agent ---
+
+    #[test]
+    fn builder_default_user_agent_contains_version() {
+        let _client = HttpClient::builder().build().unwrap();
+        let version = env!("CARGO_PKG_VERSION");
+        let expected_ua = format!("pleme-io/todoku {version}");
+        assert!(!expected_ua.is_empty());
+    }
+
+    // --- Header validation ---
+
+    #[test]
+    fn builder_header_ignores_invalid_value() {
+        let client = HttpClient::builder()
+            .header(reqwest::header::ACCEPT, "valid")
+            .header(reqwest::header::ACCEPT, "\r\ninvalid")
+            .build()
+            .unwrap();
+        let accept = client.default_headers.get(reqwest::header::ACCEPT);
+        assert_eq!(accept.unwrap(), "valid");
+    }
+
+    // --- Auth + headers together ---
+
+    #[test]
+    fn auth_headers_applied_on_top_of_defaults() {
+        let client = HttpClient::builder()
+            .auth(BearerToken::new("tok"))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .build()
+            .unwrap();
+
+        let mut headers = client.default_headers.clone();
+        client.auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer tok"
+        );
+        assert_eq!(
+            headers.get(reqwest::header::ACCEPT).unwrap(),
+            "application/json"
+        );
+    }
+
+    // --- Retry policy preserved through builder ---
+
+    #[test]
+    fn builder_retry_fields_preserved() {
+        let policy = RetryPolicy {
+            max_retries: 7,
+            initial_backoff: Duration::from_millis(250),
+            max_backoff: Duration::from_secs(10),
+            multiplier: 1.5,
+            retry_statuses: vec![429, 503],
+        };
+        let client = HttpClient::builder().retry(policy).build().unwrap();
+        assert_eq!(client.retry.max_retries, 7);
+        assert_eq!(client.retry.initial_backoff, Duration::from_millis(250));
+        assert_eq!(client.retry.max_backoff, Duration::from_secs(10));
+        assert_eq!(client.retry.multiplier, 1.5);
+        assert!(client.retry.should_retry_status(429));
+        assert!(client.retry.should_retry_status(503));
+        assert!(!client.retry.should_retry_status(500));
+    }
+
+    // --- Clone preserves auth behavior ---
+
+    #[test]
+    fn cloned_client_preserves_auth() {
+        let client = HttpClient::builder()
+            .auth(BearerToken::new("secret"))
+            .build()
+            .unwrap();
+        let cloned = client.clone();
+        let mut headers = HeaderMap::new();
+        cloned.auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer secret"
+        );
+    }
+
+    // --- Multiple base URL overrides ---
+
+    #[test]
+    fn builder_base_url_overrides_correctly() {
+        let client = HttpClient::builder()
+            .base_url("https://first.example.com")
+            .base_url("https://second.example.com")
+            .base_url("https://third.example.com")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.base_url.as_deref(),
+            Some("https://third.example.com")
+        );
+    }
+
+    // --- URL with unicode path ---
+
+    #[test]
+    fn url_resolution_with_encoded_chars() {
+        let client = HttpClient::builder()
+            .base_url("https://api.example.com")
+            .build()
+            .unwrap();
+        assert_eq!(
+            client.url("/search?q=hello%20world"),
+            "https://api.example.com/search?q=hello%20world"
+        );
+    }
 }
