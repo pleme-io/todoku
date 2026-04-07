@@ -43,11 +43,9 @@ pub struct BasicAuth {
 impl BasicAuth {
     #[must_use]
     pub fn new(username: &str, password: &str) -> Self {
-        use std::io::Write;
-        let mut buf = Vec::new();
-        write!(buf, "{username}:{password}").unwrap();
+        let credentials = format!("{username}:{password}");
         Self {
-            encoded: Self::base64_encode(&buf),
+            encoded: Self::base64_encode(credentials.as_bytes()),
         }
     }
 
