@@ -13,6 +13,9 @@ pub enum TodokuError {
     #[error("authentication failed: {0}")]
     Auth(String),
 
+    #[error("invalid header value: {0}")]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+
     #[error("max retries ({max}) exceeded for {url}")]
     MaxRetries { url: String, max: u32 },
 
@@ -21,6 +24,44 @@ pub enum TodokuError {
 
     #[error("timeout after {0:?}")]
     Timeout(std::time::Duration),
+}
+
+impl TodokuError {
+    /// Returns `true` if this is an HTTP status error.
+    #[must_use]
+    pub fn is_http(&self) -> bool {
+        matches!(self, Self::Http { .. })
+    }
+
+    /// Returns the HTTP status code if this is an `Http` variant.
+    #[must_use]
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this is a timeout error.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout(_))
+    }
+
+    /// Returns `true` if this is a max-retries-exceeded error.
+    #[must_use]
+    pub fn is_max_retries(&self) -> bool {
+        matches!(self, Self::MaxRetries { .. })
+    }
+
+    /// Construct an HTTP error from a status code and body.
+    #[must_use]
+    pub fn http(status: u16, body: impl Into<String>) -> Self {
+        Self::Http {
+            status,
+            body: body.into(),
+        }
+    }
 }
 
 /// Convenience alias for `Result<T, TodokuError>`.
@@ -225,5 +266,87 @@ mod tests {
         let err = TodokuError::Auth(String::new());
         let msg = format!("{err}");
         assert_eq!(msg, "authentication failed: ");
+    }
+
+    #[test]
+    fn is_http_returns_true_for_http_variant() {
+        let err = TodokuError::Http {
+            status: 404,
+            body: String::new(),
+        };
+        assert!(err.is_http());
+    }
+
+    #[test]
+    fn is_http_returns_false_for_other_variants() {
+        let err = TodokuError::Auth("fail".into());
+        assert!(!err.is_http());
+    }
+
+    #[test]
+    fn status_returns_code_for_http() {
+        let err = TodokuError::Http {
+            status: 503,
+            body: String::new(),
+        };
+        assert_eq!(err.status(), Some(503));
+    }
+
+    #[test]
+    fn status_returns_none_for_non_http() {
+        let err = TodokuError::Auth("no status".into());
+        assert_eq!(err.status(), None);
+    }
+
+    #[test]
+    fn is_timeout_check() {
+        let err = TodokuError::Timeout(Duration::from_secs(10));
+        assert!(err.is_timeout());
+        assert!(!err.is_http());
+    }
+
+    #[test]
+    fn is_max_retries_check() {
+        let err = TodokuError::MaxRetries {
+            url: "https://example.com".into(),
+            max: 3,
+        };
+        assert!(err.is_max_retries());
+        assert!(!err.is_timeout());
+    }
+
+    #[test]
+    fn invalid_header_value_from_conversion() {
+        use reqwest::header::HeaderValue;
+        let bad = HeaderValue::from_str("invalid \x00 value");
+        assert!(bad.is_err());
+        let err: TodokuError = bad.unwrap_err().into();
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid header value"));
+    }
+
+    #[test]
+    fn invalid_header_value_display() {
+        use reqwest::header::HeaderValue;
+        let bad = HeaderValue::from_str("\x00").unwrap_err();
+        let err = TodokuError::InvalidHeaderValue(bad);
+        let msg = format!("{err}");
+        assert!(msg.starts_with("invalid header value:"));
+    }
+
+    #[test]
+    fn http_constructor() {
+        let err = TodokuError::http(502, "Bad Gateway");
+        assert_eq!(err.status(), Some(502));
+        assert!(err.is_http());
+        let msg = format!("{err}");
+        assert_eq!(msg, "HTTP 502: Bad Gateway");
+    }
+
+    #[test]
+    fn http_constructor_from_string() {
+        let body = String::from("Service Unavailable");
+        let err = TodokuError::http(503, body);
+        assert_eq!(err.status(), Some(503));
     }
 }
