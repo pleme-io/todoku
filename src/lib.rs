@@ -9,7 +9,7 @@ pub mod error;
 pub mod github;
 pub mod retry;
 
-pub use auth::{Auth, BasicAuth, BearerToken, HeaderAuth};
+pub use auth::{Auth, BasicAuth, BearerToken, HeaderAuth, NoAuth};
 pub use client::{HttpClient, HttpClientBuilder};
 pub use error::TodokuError;
 pub use github::{FileInfo, GitHubApi, GitHubClient, GitHubRepo, OwnerType};

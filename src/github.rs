@@ -3,7 +3,9 @@
 use crate::auth::BearerToken;
 use crate::client::HttpClient;
 use crate::error::TodokuError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 /// Trait abstracting GitHub API interactions for testability.
 #[async_trait::async_trait]
@@ -42,7 +44,7 @@ pub trait GitHubApi: Send + Sync {
 }
 
 /// Whether the owner is an organization or a user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OwnerType {
     /// GitHub organization.
@@ -51,8 +53,40 @@ pub enum OwnerType {
     User,
 }
 
+impl fmt::Display for OwnerType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Org => f.write_str("org"),
+            Self::User => f.write_str("user"),
+        }
+    }
+}
+
+impl FromStr for OwnerType {
+    type Err = TodokuError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "org" => Ok(Self::Org),
+            "user" => Ok(Self::User),
+            _ => Err(TodokuError::Auth(format!("unknown owner type: {s}"))),
+        }
+    }
+}
+
+impl OwnerType {
+    /// Returns the GitHub API path segment for this owner type.
+    #[must_use]
+    pub fn api_path_segment(self) -> &'static str {
+        match self {
+            Self::Org => "orgs",
+            Self::User => "users",
+        }
+    }
+}
+
 /// Summary of a GitHub repository.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GitHubRepo {
     /// Repository name (e.g. "todoku").
     pub name: String,
@@ -74,7 +108,7 @@ pub struct GitHubRepo {
 }
 
 /// Metadata about a file in a GitHub repository.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileInfo {
     /// Git blob SHA.
     pub sha: String,
@@ -104,6 +138,16 @@ struct ContentEntry {
     sha: String,
     size: u64,
     download_url: Option<String>,
+}
+
+impl From<ContentEntry> for FileInfo {
+    fn from(entry: ContentEntry) -> Self {
+        Self {
+            sha: entry.sha,
+            size: entry.size,
+            download_url: entry.download_url.unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,17 +238,15 @@ impl GitHubApi for GitHubClient {
     ) -> Result<Vec<GitHubRepo>, TodokuError> {
         // GitHub caps `per_page` at 100. Paginate until a short page is returned.
         const PER_PAGE: u32 = 100;
-        let base = match owner_type {
-            OwnerType::Org => format!("/orgs/{owner}/repos"),
-            OwnerType::User => format!("/users/{owner}/repos"),
-        };
+        let segment = owner_type.api_path_segment();
+        let base = format!("/{segment}/{owner}/repos");
         let mut all = Vec::new();
         let mut page: u32 = 1;
         loop {
             let path = format!("{base}?per_page={PER_PAGE}&type=all&page={page}");
-            let mut batch: Vec<GitHubRepo> = self.client.get(&path).await?;
+            let batch: Vec<GitHubRepo> = self.client.get(&path).await?;
             let len = batch.len();
-            all.append(&mut batch);
+            all.extend(batch);
             if len < PER_PAGE as usize {
                 break;
             }
@@ -223,11 +265,7 @@ impl GitHubApi for GitHubClient {
             .client
             .get(&format!("/repos/{owner}/{repo}/contents/{path}"))
             .await?;
-        Ok(FileInfo {
-            sha: entry.sha,
-            size: entry.size,
-            download_url: entry.download_url.unwrap_or_default(),
-        })
+        Ok(entry.into())
     }
 }
 
@@ -457,6 +495,59 @@ mod tests {
         assert_eq!(debug, "Org");
         let debug = format!("{:?}", OwnerType::User);
         assert_eq!(debug, "User");
+    }
+
+    #[test]
+    fn owner_type_display() {
+        assert_eq!(format!("{}", OwnerType::Org), "org");
+        assert_eq!(format!("{}", OwnerType::User), "user");
+    }
+
+    #[test]
+    fn owner_type_from_str_valid() {
+        assert_eq!("org".parse::<OwnerType>().unwrap(), OwnerType::Org);
+        assert_eq!("user".parse::<OwnerType>().unwrap(), OwnerType::User);
+    }
+
+    #[test]
+    fn owner_type_from_str_invalid() {
+        assert!("invalid".parse::<OwnerType>().is_err());
+        assert!("Org".parse::<OwnerType>().is_err());
+        assert!("".parse::<OwnerType>().is_err());
+    }
+
+    #[test]
+    fn owner_type_display_from_str_round_trip() {
+        for ot in [OwnerType::Org, OwnerType::User] {
+            let s = ot.to_string();
+            let parsed: OwnerType = s.parse().unwrap();
+            assert_eq!(parsed, ot);
+        }
+    }
+
+    #[test]
+    fn owner_type_api_path_segment() {
+        assert_eq!(OwnerType::Org.api_path_segment(), "orgs");
+        assert_eq!(OwnerType::User.api_path_segment(), "users");
+    }
+
+    #[test]
+    fn owner_type_serde_round_trip() {
+        for ot in [OwnerType::Org, OwnerType::User] {
+            let json = serde_json::to_string(&ot).unwrap();
+            let parsed: OwnerType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, ot);
+        }
+    }
+
+    #[test]
+    fn owner_type_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(OwnerType::Org);
+        set.insert(OwnerType::User);
+        set.insert(OwnerType::Org);
+        assert_eq!(set.len(), 2);
     }
 
     // --- Internal deserialization types ---
