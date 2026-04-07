@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn deserialize_repo_info_missing_fields() {
-        let json = r#"{}"#;
+        let json = r"{}";
         let info: RepoInfo = serde_json::from_str(json).unwrap();
         assert!(info.default_branch.is_none());
         assert!(info.language.is_none());

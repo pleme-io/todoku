@@ -76,6 +76,7 @@ impl RetryPolicy {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

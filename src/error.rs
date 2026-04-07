@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn result_type_alias_ok() {
         let result: Result<i32> = Ok(42);
-        assert_eq!(result.unwrap(), 42);
+        assert_matches!(result, Ok(val) if val == 42);
     }
 
     #[test]
@@ -216,7 +216,7 @@ mod tests {
     fn timeout_error_zero_duration() {
         let err = TodokuError::Timeout(Duration::ZERO);
         let msg = format!("{err}");
-        assert!(msg.contains("0"));
+        assert!(msg.contains('0'));
     }
 
     #[test]

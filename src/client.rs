@@ -591,7 +591,7 @@ mod tests {
         let client = HttpClient::builder().retry(policy).build().unwrap();
         assert_eq!(client.retry.max_retries, 10);
         assert_eq!(client.retry.initial_backoff, Duration::from_millis(100));
-        assert_eq!(client.retry.multiplier, 1.5);
+        assert!((client.retry.multiplier - 1.5).abs() < f64::EPSILON);
         assert!(client.retry.should_retry_status(503));
         assert!(!client.retry.should_retry_status(429));
     }
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(client.retry.max_retries, 7);
         assert_eq!(client.retry.initial_backoff, Duration::from_millis(250));
         assert_eq!(client.retry.max_backoff, Duration::from_secs(10));
-        assert_eq!(client.retry.multiplier, 1.5);
+        assert!((client.retry.multiplier - 1.5).abs() < f64::EPSILON);
         assert!(client.retry.should_retry_status(429));
         assert!(client.retry.should_retry_status(503));
         assert!(!client.retry.should_retry_status(500));
