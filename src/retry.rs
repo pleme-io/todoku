@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Retry policy for failed requests.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RetryPolicy {
     /// Maximum number of retries (0 = no retries).
@@ -429,6 +429,20 @@ mod tests {
         let aggressive = RetryPolicy::aggressive();
         let default = RetryPolicy::default();
         assert_eq!(aggressive.retry_statuses, default.retry_statuses);
+    }
+
+    #[test]
+    fn partial_eq_same_policies() {
+        assert_eq!(RetryPolicy::default(), RetryPolicy::default());
+        assert_eq!(RetryPolicy::none(), RetryPolicy::none());
+        assert_eq!(RetryPolicy::aggressive(), RetryPolicy::aggressive());
+    }
+
+    #[test]
+    fn partial_eq_different_policies() {
+        assert_ne!(RetryPolicy::default(), RetryPolicy::none());
+        assert_ne!(RetryPolicy::default(), RetryPolicy::aggressive());
+        assert_ne!(RetryPolicy::none(), RetryPolicy::aggressive());
     }
 
     #[test]

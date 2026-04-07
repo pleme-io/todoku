@@ -10,6 +10,7 @@ pub trait Auth: Send + Sync {
 }
 
 /// No authentication.
+#[derive(Debug, Default, Clone, Copy)]
 pub struct NoAuth;
 
 impl Auth for NoAuth {
@@ -483,6 +484,24 @@ mod tests {
     }
 
     // --- Multiple auth applications ---
+
+    #[test]
+    fn no_auth_default() {
+        let auth = NoAuth::default();
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn no_auth_is_copy() {
+        let a = NoAuth;
+        let b = a;
+        let _ = a;
+        let mut headers = HeaderMap::new();
+        b.apply(&mut headers);
+        assert!(headers.is_empty());
+    }
 
     #[test]
     fn auth_apply_is_idempotent() {
