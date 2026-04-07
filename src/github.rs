@@ -43,6 +43,7 @@ pub trait GitHubApi: Send + Sync {
 
 /// Whether the owner is an organization or a user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OwnerType {
     /// GitHub organization.
     Org,

@@ -2,6 +2,7 @@
 
 /// Errors that can occur during HTTP operations.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum TodokuError {
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
