@@ -1,4 +1,4 @@
-//! GitHub API client built on todoku's HttpClient.
+//! GitHub API client built on todoku's `HttpClient`.
 
 use crate::auth::BearerToken;
 use crate::client::HttpClient;
