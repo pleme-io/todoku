@@ -377,4 +377,113 @@ mod tests {
         auth.apply(&mut headers);
         assert!(headers.is_empty());
     }
+
+    // --- Auth is Send + Sync ---
+
+    #[test]
+    fn bearer_token_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<BearerToken>();
+    }
+
+    #[test]
+    fn basic_auth_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<BasicAuth>();
+    }
+
+    #[test]
+    fn header_auth_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HeaderAuth>();
+    }
+
+    #[test]
+    fn no_auth_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<NoAuth>();
+    }
+
+    // --- Auth trait object in Arc ---
+
+    #[test]
+    fn auth_arc_trait_object() {
+        let auth: std::sync::Arc<dyn Auth> = std::sync::Arc::new(BearerToken::new("arc-tok"));
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer arc-tok"
+        );
+    }
+
+    // --- Bearer token with long value ---
+
+    #[test]
+    fn bearer_token_long_value() {
+        let long = "a".repeat(1000);
+        let auth = BearerToken::new(&long);
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        let val = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(val, format!("Bearer {long}"));
+    }
+
+    // --- BasicAuth base64 encode known values ---
+
+    #[test]
+    fn base64_encode_all_bytes() {
+        let input: Vec<u8> = (0..=255).collect();
+        let result = BasicAuth::base64_encode(&input);
+        assert!(!result.is_empty());
+        assert!(result.chars().all(|c| c.is_ascii_alphanumeric()
+            || c == '+' || c == '/' || c == '='));
+    }
+
+    #[test]
+    fn base64_encode_padding_one() {
+        let result = BasicAuth::base64_encode(b"ab");
+        assert_eq!(result, "YWI=");
+    }
+
+    #[test]
+    fn base64_encode_padding_two() {
+        let result = BasicAuth::base64_encode(b"a");
+        assert_eq!(result, "YQ==");
+    }
+
+    #[test]
+    fn base64_encode_no_padding() {
+        let result = BasicAuth::base64_encode(b"abc");
+        assert_eq!(result, "YWJj");
+    }
+
+    // --- HeaderAuth with various header names ---
+
+    #[test]
+    fn header_auth_with_content_type() {
+        let auth = HeaderAuth::new(reqwest::header::CONTENT_TYPE, "application/json");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(headers.get(reqwest::header::CONTENT_TYPE).unwrap(), "application/json");
+    }
+
+    // --- Multiple auth applications ---
+
+    #[test]
+    fn auth_apply_is_idempotent() {
+        let auth = BearerToken::new("tok");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        auth.apply(&mut headers);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer tok"
+        );
+    }
 }
