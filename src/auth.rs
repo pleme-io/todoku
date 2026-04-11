@@ -515,4 +515,71 @@ mod tests {
             "Bearer tok"
         );
     }
+
+    // --- Multiple auth strategies sequentially ---
+
+    #[test]
+    fn bearer_then_basic_overwrites_authorization() {
+        let mut headers = HeaderMap::new();
+        BearerToken::new("tok").apply(&mut headers);
+        assert!(headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("Bearer "));
+        BasicAuth::new("u", "p").apply(&mut headers);
+        assert!(headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("Basic "));
+    }
+
+    // --- HeaderAuth with various standard header names ---
+
+    #[test]
+    fn header_auth_with_accept() {
+        let auth = HeaderAuth::new(reqwest::header::ACCEPT, "text/html");
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers);
+        assert_eq!(headers.get(reqwest::header::ACCEPT).unwrap(), "text/html");
+    }
+
+    // --- Auth strategy does not modify unrelated headers ---
+
+    #[test]
+    fn basic_auth_preserves_other_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-trace-id"),
+            HeaderValue::from_static("trace-123"),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        BasicAuth::new("user", "pass").apply(&mut headers);
+        assert_eq!(headers.len(), 3);
+        assert_eq!(headers.get("x-trace-id").unwrap(), "trace-123");
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+    }
+
+    // --- base64 encode known RFC 4648 test vectors ---
+
+    #[test]
+    fn base64_rfc4648_test_vectors() {
+        // From RFC 4648 Section 10
+        assert_eq!(BasicAuth::base64_encode(b""), "");
+        assert_eq!(BasicAuth::base64_encode(b"f"), "Zg==");
+        assert_eq!(BasicAuth::base64_encode(b"fo"), "Zm8=");
+        assert_eq!(BasicAuth::base64_encode(b"foo"), "Zm9v");
+        assert_eq!(BasicAuth::base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(BasicAuth::base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(BasicAuth::base64_encode(b"foobar"), "Zm9vYmFy");
+    }
 }

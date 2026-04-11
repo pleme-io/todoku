@@ -349,4 +349,111 @@ mod tests {
         let err = TodokuError::http(503, body);
         assert_eq!(err.status(), Some(503));
     }
+
+    // --- is_* helpers return false for unrelated variants ---
+
+    #[test]
+    fn is_http_false_for_timeout() {
+        let err = TodokuError::Timeout(Duration::from_secs(1));
+        assert!(!err.is_http());
+        assert!(!err.is_max_retries());
+    }
+
+    #[test]
+    fn is_timeout_false_for_max_retries() {
+        let err = TodokuError::MaxRetries {
+            url: "https://example.com".into(),
+            max: 3,
+        };
+        assert!(!err.is_timeout());
+        assert!(!err.is_http());
+    }
+
+    #[test]
+    fn is_max_retries_false_for_auth() {
+        let err = TodokuError::Auth("nope".into());
+        assert!(!err.is_max_retries());
+        assert!(!err.is_timeout());
+        assert!(!err.is_http());
+    }
+
+    #[test]
+    fn status_returns_none_for_timeout() {
+        let err = TodokuError::Timeout(Duration::from_secs(5));
+        assert_eq!(err.status(), None);
+    }
+
+    #[test]
+    fn status_returns_none_for_max_retries() {
+        let err = TodokuError::MaxRetries {
+            url: String::new(),
+            max: 0,
+        };
+        assert_eq!(err.status(), None);
+    }
+
+    #[test]
+    fn status_returns_none_for_deserialize() {
+        let serde_err = serde_json::from_str::<serde_json::Value>("!!!").unwrap_err();
+        let err: TodokuError = serde_err.into();
+        assert_eq!(err.status(), None);
+    }
+
+    // --- std::error::Error source chain ---
+
+    #[test]
+    fn http_error_source_is_none() {
+        let err = TodokuError::http(500, "fail");
+        let source = std::error::Error::source(&err);
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn auth_error_source_is_none() {
+        let err = TodokuError::Auth("bad".into());
+        let source = std::error::Error::source(&err);
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn timeout_error_source_is_none() {
+        let err = TodokuError::Timeout(Duration::from_secs(1));
+        let source = std::error::Error::source(&err);
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn max_retries_error_source_is_none() {
+        let err = TodokuError::MaxRetries {
+            url: "u".into(),
+            max: 1,
+        };
+        let source = std::error::Error::source(&err);
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn deserialize_error_has_source() {
+        let serde_err = serde_json::from_str::<serde_json::Value>("{{").unwrap_err();
+        let err: TodokuError = serde_err.into();
+        let source = std::error::Error::source(&err);
+        assert!(source.is_some());
+    }
+
+    // --- http() constructor edge cases ---
+
+    #[test]
+    fn http_constructor_with_empty_body() {
+        let err = TodokuError::http(204, "");
+        assert_eq!(err.status(), Some(204));
+        assert_eq!(format!("{err}"), "HTTP 204: ");
+    }
+
+    #[test]
+    fn http_constructor_with_multiline_body() {
+        let err = TodokuError::http(500, "line1\nline2\nline3");
+        let msg = format!("{err}");
+        assert!(msg.contains("line1"));
+        assert!(msg.contains("line3"));
+    }
 }

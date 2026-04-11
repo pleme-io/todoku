@@ -1024,4 +1024,169 @@ mod tests {
         let tag: TagEntry = serde_json::from_str(json).unwrap();
         assert_eq!(tag.name, "1.0.0");
     }
+
+    // --- ContentEntry -> FileInfo From conversion ---
+
+    #[test]
+    fn content_entry_to_file_info_with_url() {
+        let entry = ContentEntry {
+            sha: "abc123".to_string(),
+            size: 4096,
+            download_url: Some("https://raw.example.com/file.rs".to_string()),
+        };
+        let info: FileInfo = entry.into();
+        assert_eq!(info.sha, "abc123");
+        assert_eq!(info.size, 4096);
+        assert_eq!(info.download_url, "https://raw.example.com/file.rs");
+    }
+
+    #[test]
+    fn content_entry_to_file_info_without_url() {
+        let entry = ContentEntry {
+            sha: "def456".to_string(),
+            size: 0,
+            download_url: None,
+        };
+        let info: FileInfo = entry.into();
+        assert_eq!(info.sha, "def456");
+        assert_eq!(info.size, 0);
+        assert!(info.download_url.is_empty());
+    }
+
+    // --- FileInfo PartialEq ---
+
+    #[test]
+    fn file_info_equality() {
+        let a = FileInfo {
+            sha: "abc".to_string(),
+            size: 100,
+            download_url: "https://example.com".to_string(),
+        };
+        let b = FileInfo {
+            sha: "abc".to_string(),
+            size: 100,
+            download_url: "https://example.com".to_string(),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn file_info_inequality_sha() {
+        let a = FileInfo {
+            sha: "abc".to_string(),
+            size: 100,
+            download_url: String::new(),
+        };
+        let b = FileInfo {
+            sha: "xyz".to_string(),
+            size: 100,
+            download_url: String::new(),
+        };
+        assert_ne!(a, b);
+    }
+
+    // --- GitHubRepo PartialEq ---
+
+    #[test]
+    fn github_repo_equality() {
+        let a = GitHubRepo {
+            name: "r".to_string(),
+            full_name: "o/r".to_string(),
+            default_branch: Some("main".to_string()),
+            language: None,
+            archived: false,
+            fork: false,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn github_repo_inequality_on_archived() {
+        let a = GitHubRepo {
+            name: "r".to_string(),
+            full_name: "o/r".to_string(),
+            default_branch: None,
+            language: None,
+            archived: false,
+            fork: false,
+        };
+        let b = GitHubRepo {
+            archived: true,
+            ..a.clone()
+        };
+        assert_ne!(a, b);
+    }
+
+    // --- OwnerType serde edge cases ---
+
+    #[test]
+    fn owner_type_serde_org_json_value() {
+        let json = serde_json::to_string(&OwnerType::Org).unwrap();
+        assert_eq!(json, r#""Org""#);
+    }
+
+    #[test]
+    fn owner_type_serde_user_json_value() {
+        let json = serde_json::to_string(&OwnerType::User).unwrap();
+        assert_eq!(json, r#""User""#);
+    }
+
+    #[test]
+    fn owner_type_deserialize_invalid_string() {
+        let result = serde_json::from_str::<OwnerType>(r#""invalid""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn owner_type_deserialize_number_fails() {
+        let result = serde_json::from_str::<OwnerType>("42");
+        assert!(result.is_err());
+    }
+
+    // --- GitHubClient is Send + Sync ---
+
+    #[test]
+    fn github_client_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<GitHubClient>();
+    }
+
+    // --- GitHubApi trait is object-safe ---
+
+    #[test]
+    fn github_api_trait_is_object_safe() {
+        // This compiles only if GitHubApi is object-safe
+        fn accept_trait_object(_api: &dyn GitHubApi) {}
+        let mock = MockGitHubApi::new();
+        accept_trait_object(&mock);
+    }
+
+    // --- Mock with custom head SHA ---
+
+    #[tokio::test]
+    async fn mock_custom_head_sha() {
+        let mut mock = MockGitHubApi::new();
+        mock.head_sha = "deadbeef".to_string();
+        let sha = mock.get_repo_head("org", "repo").await.unwrap();
+        assert_eq!(sha, "deadbeef");
+    }
+
+    // --- Mock custom file info ---
+
+    #[tokio::test]
+    async fn mock_custom_file_info() {
+        let mut mock = MockGitHubApi::new();
+        mock.file = FileInfo {
+            sha: "custom_sha".to_string(),
+            size: 99999,
+            download_url: "https://custom.example.com/big.bin".to_string(),
+        };
+        let info = mock
+            .get_file_info("org", "repo", "big.bin")
+            .await
+            .unwrap();
+        assert_eq!(info.size, 99999);
+        assert_eq!(info.sha, "custom_sha");
+    }
 }

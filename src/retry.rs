@@ -451,4 +451,94 @@ mod tests {
         let backoff = p.backoff_for(0);
         assert_eq!(backoff, Duration::from_millis(500));
     }
+
+    // --- Zero max_backoff ---
+
+    #[test]
+    fn backoff_zero_max_backoff() {
+        let p = RetryPolicy {
+            initial_backoff: Duration::from_millis(500),
+            max_backoff: Duration::ZERO,
+            multiplier: 2.0,
+            ..Default::default()
+        };
+        // All attempts clamped to zero
+        assert_eq!(p.backoff_for(0), Duration::ZERO);
+        assert_eq!(p.backoff_for(3), Duration::ZERO);
+    }
+
+    // --- Backoff sequence for aggressive ---
+
+    #[test]
+    fn backoff_full_sequence_aggressive() {
+        let p = RetryPolicy::aggressive();
+        let sequence: Vec<Duration> = (0..=4).map(|i| p.backoff_for(i)).collect();
+        assert_eq!(
+            sequence,
+            vec![
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+                Duration::from_millis(800),
+                Duration::from_millis(1600),
+                Duration::from_millis(3200),
+            ]
+        );
+    }
+
+    // --- Large multiplier ---
+
+    #[test]
+    fn backoff_large_multiplier_clamped() {
+        let p = RetryPolicy {
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(1),
+            multiplier: 10.0,
+            ..Default::default()
+        };
+        // attempt 0: 100ms
+        assert_eq!(p.backoff_for(0), Duration::from_millis(100));
+        // attempt 1: 1000ms (exactly at max)
+        assert_eq!(p.backoff_for(1), Duration::from_secs(1));
+        // attempt 2: 10000ms clamped to 1000ms
+        assert_eq!(p.backoff_for(2), Duration::from_secs(1));
+    }
+
+    // --- Serde with very small durations ---
+
+    #[test]
+    fn serde_round_trip_microsecond_backoff() {
+        let original = RetryPolicy {
+            initial_backoff: Duration::from_micros(100),
+            max_backoff: Duration::from_micros(1000),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: RetryPolicy = serde_json::from_str(&json).expect("deserialize");
+        // Microsecond precision may be lost in serde (Duration serializes as {secs, nanos})
+        // but the value should round-trip correctly
+        assert_eq!(restored.initial_backoff, original.initial_backoff);
+        assert_eq!(restored.max_backoff, original.max_backoff);
+    }
+
+    // --- PartialEq with modified single field ---
+
+    #[test]
+    fn partial_eq_differs_on_single_field() {
+        let base = RetryPolicy::default();
+        let modified = RetryPolicy {
+            max_retries: base.max_retries + 1,
+            ..base.clone()
+        };
+        assert_ne!(base, modified);
+    }
+
+    // --- Constructors do not share state ---
+
+    #[test]
+    fn constructors_produce_independent_values() {
+        let mut a = RetryPolicy::default();
+        let b = RetryPolicy::default();
+        a.max_retries = 99;
+        assert_ne!(a.max_retries, b.max_retries);
+    }
 }

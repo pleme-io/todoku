@@ -753,6 +753,49 @@ mod tests {
         );
     }
 
+    // --- Clone preserves default headers ---
+
+    #[test]
+    fn cloned_client_preserves_headers() {
+        let client = HttpClient::builder()
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(HeaderName::from_static("x-custom"), "val")
+            .build()
+            .unwrap();
+        let cloned = client.clone();
+        assert_eq!(cloned.default_headers.len(), 2);
+        assert_eq!(
+            cloned.default_headers.get(reqwest::header::ACCEPT).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            cloned.default_headers.get("x-custom").unwrap(),
+            "val"
+        );
+    }
+
+    // --- Clone preserves retry policy fully ---
+
+    #[test]
+    fn cloned_client_preserves_retry_policy_details() {
+        let policy = RetryPolicy {
+            max_retries: 7,
+            initial_backoff: Duration::from_millis(250),
+            max_backoff: Duration::from_secs(10),
+            multiplier: 1.5,
+            retry_statuses: vec![418, 503],
+        };
+        let client = HttpClient::builder()
+            .retry(policy)
+            .build()
+            .unwrap();
+        let cloned = client.clone();
+        assert_eq!(cloned.retry.max_retries, 7);
+        assert_eq!(cloned.retry.initial_backoff, Duration::from_millis(250));
+        assert_eq!(cloned.retry.max_backoff, Duration::from_secs(10));
+        assert_eq!(cloned.retry.retry_statuses, vec![418, 503]);
+    }
+
     #[test]
     fn built_client_url_with_port() {
         let client = HttpClient::builder()
@@ -763,6 +806,29 @@ mod tests {
             client.url("/health"),
             "https://localhost:8080/api/health"
         );
+    }
+
+    // --- HttpClient is Send + Sync ---
+
+    #[test]
+    fn http_client_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HttpClient>();
+    }
+
+    // --- HttpClient default via builder().build() ---
+
+    #[test]
+    fn builder_new_equals_default() {
+        let from_new = HttpClientBuilder::new();
+        let from_default = HttpClientBuilder::default();
+        // Both should produce clients with the same configuration
+        let c1 = from_new.build().unwrap();
+        let c2 = from_default.build().unwrap();
+        assert_eq!(c1.base_url, c2.base_url);
+        assert_eq!(c1.retry.max_retries, c2.retry.max_retries);
+        assert!(c1.default_headers.is_empty());
+        assert!(c2.default_headers.is_empty());
     }
 
     // --- Builder method chaining returns correct type ---
