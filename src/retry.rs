@@ -1,6 +1,13 @@
 //! Configurable retry policies with exponential backoff.
+//!
+//! The [`RetryPolicy`] type is the canonical retry/backoff config across
+//! pleme-io fleet binaries. Use it for HTTP retries (consumed by
+//! [`crate::HttpClient`]) and for any other flaky async operation via
+//! [`retry_with_backoff`] — a generic retry loop that takes a closure
+//! returning any `Result<T, E>`.
 
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::time::Duration;
 
 /// Retry policy for failed requests.
@@ -72,6 +79,111 @@ impl RetryPolicy {
     #[must_use]
     pub fn should_retry_status(&self, status: u16) -> bool {
         self.retry_statuses.contains(&status)
+    }
+}
+
+/// Error returned by [`retry_with_backoff`] when the operation cannot be
+/// produced as a successful value.
+///
+/// Carries the underlying error verbatim — callers can inspect, log, or
+/// convert into a domain error type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryError<E> {
+    /// The operation failed every attempt up to `max_retries + 1`.
+    ///
+    /// `attempts` is the total number of times the operation ran (≥ 1).
+    /// `last` is the error from the final attempt.
+    Exhausted { attempts: u32, last: E },
+    /// The caller's `should_retry` predicate classified the error as
+    /// non-retryable; the loop bailed early.
+    NonRetryable(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for RetryError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exhausted { attempts, last } => {
+                write!(f, "retry exhausted after {attempts} attempts: {last}")
+            }
+            Self::NonRetryable(e) => write!(f, "non-retryable error: {e}"),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for RetryError<E> {}
+
+impl<E> RetryError<E> {
+    /// Extract the underlying error, regardless of variant.
+    pub fn into_inner(self) -> E {
+        match self {
+            Self::Exhausted { last, .. } | Self::NonRetryable(last) => last,
+        }
+    }
+}
+
+/// Execute an async operation with exponential backoff retry.
+///
+/// The operation runs up to `policy.max_retries + 1` times. Between
+/// failed attempts the loop sleeps for [`RetryPolicy::backoff_for`] and
+/// the predicate `should_retry` is consulted — if it returns `false`
+/// for a given error, the loop bails immediately with
+/// [`RetryError::NonRetryable`]. If every attempt fails and the predicate
+/// keeps allowing retries, the loop returns [`RetryError::Exhausted`]
+/// carrying the last error.
+///
+/// # Errors
+///
+/// Returns [`RetryError::NonRetryable`] if `should_retry` returns `false`
+/// at any attempt, or [`RetryError::Exhausted`] when retries are exhausted.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use todoku::{retry_with_backoff, RetryPolicy};
+///
+/// let policy = RetryPolicy::default();
+/// // Retry every error.
+/// let result: Result<String, _> = retry_with_backoff(
+///     &policy,
+///     || async { connect_db().await },
+///     |_err| true,
+/// ).await;
+/// ```
+pub async fn retry_with_backoff<F, Fut, T, E, P>(
+    policy: &RetryPolicy,
+    mut operation: F,
+    mut should_retry: P,
+) -> Result<T, RetryError<E>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    P: FnMut(&E) -> bool,
+{
+    let mut attempt: u32 = 0;
+    loop {
+        attempt = attempt.saturating_add(1);
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if !should_retry(&err) {
+                    return Err(RetryError::NonRetryable(err));
+                }
+                if attempt > policy.max_retries {
+                    return Err(RetryError::Exhausted {
+                        attempts: attempt,
+                        last: err,
+                    });
+                }
+                let backoff = policy.backoff_for(attempt - 1);
+                tracing::warn!(
+                    attempt,
+                    max = policy.max_retries,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "operation failed, retrying"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+        }
     }
 }
 
@@ -540,5 +652,159 @@ mod tests {
         let b = RetryPolicy::default();
         a.max_retries = 99;
         assert_ne!(a.max_retries, b.max_retries);
+    }
+}
+
+#[cfg(test)]
+mod retry_with_backoff_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    fn fast_policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_retries,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(2),
+            multiplier: 1.0,
+            retry_statuses: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn succeeds_first_attempt() {
+        let policy = fast_policy(3);
+        let result: Result<i32, RetryError<&str>> =
+            retry_with_backoff(&policy, || async { Ok::<_, &str>(42) }, |_| true).await;
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn succeeds_after_failures() {
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_clone = counter.clone();
+        let policy = fast_policy(5);
+        let result: Result<i32, RetryError<&str>> = retry_with_backoff(
+            &policy,
+            || {
+                let counter = counter_clone.clone();
+                async move {
+                    let count = counter.fetch_add(1, Ordering::SeqCst);
+                    if count < 2 { Err("transient") } else { Ok(7) }
+                }
+            },
+            |_| true,
+        )
+        .await;
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn exhausted_returns_last_error() {
+        let policy = fast_policy(2);
+        let result: Result<i32, RetryError<&str>> =
+            retry_with_backoff(&policy, || async { Err::<i32, _>("always fails") }, |_| true)
+                .await;
+        match result {
+            Err(RetryError::Exhausted { attempts, last }) => {
+                assert_eq!(attempts, 3);
+                assert_eq!(last, "always fails");
+            }
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_retryable_short_circuits() {
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_clone = counter.clone();
+        let policy = fast_policy(5);
+        let result: Result<i32, RetryError<&str>> = retry_with_backoff(
+            &policy,
+            || {
+                let counter = counter_clone.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Err::<i32, _>("fatal")
+                }
+            },
+            |_e| false,
+        )
+        .await;
+        match result {
+            Err(RetryError::NonRetryable(e)) => assert_eq!(e, "fatal"),
+            other => panic!("expected NonRetryable, got {other:?}"),
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn zero_retries_runs_once() {
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_clone = counter.clone();
+        let policy = fast_policy(0);
+        let _ = retry_with_backoff(
+            &policy,
+            || {
+                let counter = counter_clone.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Err::<i32, _>("nope")
+                }
+            },
+            |_| true,
+        )
+        .await;
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn predicate_inspects_error() {
+        let policy = fast_policy(5);
+        // Retry only "transient", bail on "fatal".
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
+            &policy,
+            || {
+                let attempts = attempts_clone.clone();
+                async move {
+                    let n = attempts.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 { Err("transient") } else { Err("fatal") }
+                }
+            },
+            |e| *e == "transient",
+        )
+        .await;
+        match result {
+            Err(RetryError::NonRetryable(e)) => assert_eq!(e, "fatal"),
+            other => panic!("expected NonRetryable on second attempt, got {other:?}"),
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn retry_error_into_inner_extracts() {
+        let exhausted = RetryError::Exhausted {
+            attempts: 3,
+            last: "boom",
+        };
+        assert_eq!(exhausted.into_inner(), "boom");
+        let nonr = RetryError::NonRetryable("nope");
+        assert_eq!(nonr.into_inner(), "nope");
+    }
+
+    #[test]
+    fn retry_error_display() {
+        let e = RetryError::Exhausted {
+            attempts: 5,
+            last: "boom",
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("5"));
+        assert!(msg.contains("boom"));
+        let n = RetryError::NonRetryable("fatal");
+        assert!(format!("{n}").contains("fatal"));
     }
 }

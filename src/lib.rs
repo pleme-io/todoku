@@ -13,4 +13,4 @@ pub use auth::{Auth, BasicAuth, BearerToken, HeaderAuth, NoAuth};
 pub use client::{HttpClient, HttpClientBuilder};
 pub use error::TodokuError;
 pub use github::{FileInfo, GitHubApi, GitHubClient, GitHubRepo, OwnerType};
-pub use retry::RetryPolicy;
+pub use retry::{retry_with_backoff, RetryError, RetryPolicy};
