@@ -19,15 +19,26 @@ so every pleme-io app with API calls uses the same patterns.
 
 | Module | Purpose |
 |--------|---------|
-| `client.rs` | `HttpClient`, `HttpClientBuilder` — builder, get/post/put/delete/get_raw |
+| `client.rs` | `HttpClient`, `HttpClientBuilder` — builder, get/post/put/delete/get_raw; `Transport` enum (Reqwest \| Stealth) + async `guard_url` SSRF hook |
 | `auth.rs` | `Auth` trait, `BearerToken`, `BasicAuth`, `HeaderAuth`, `NoAuth` |
 | `retry.rs` | `RetryPolicy`, `retry_with_backoff`, `RetryError` — exponential backoff, generic loop for any flaky async op |
-| `error.rs` | `TodokuError` — request, HTTP status, max retries, JSON parse |
+| `tls.rs` | `TlsProfile` — `Rustls` (default) + `Chrome`/`Firefox`/`Safari` JA3/JA4 browser-fingerprint emulation (via `wreq`, behind the `stealth` feature). `is_emulated`/`requires_stealth`/`available`. (Obscura absorption.) |
+| `ssrf.rs` | `SsrfReason` (10 variants) + `classify_ip` + `check_url` / `check_url_resolved` — SSRF guard that rejects loopback/private/link-local/metadata targets, at parse-time AND DNS-resolution-time (`tokio::net::lookup_host`). Opt-in via the builder's `ssrf_guard`. (Obscura absorption.) |
+| `blocking.rs` | `BlockingHttpClient` + `HttpResponse` — a **sync facade** over the async `HttpClient` (owns a current-thread `Runtime`, `rt.block_on`). Solve-once for sync callers (e.g. nami-core's `FetchClient`) so there is ONE fleet HTTP implementation, not a parallel blocking client. |
+| `github.rs` | `GitHubApi`/`GitHubClient`/`GitHubRepo` — typed GitHub REST surface over `HttpClient` |
+| `error.rs` | `TodokuError` — request, HTTP status, max retries, JSON parse, `Ssrf(SsrfReason)`, `UnsupportedTlsProfile`, `Runtime` |
+
+### Features
+
+| Feature | Enables | Optional deps |
+|---------|---------|---------------|
+| (default) | rustls transport, SSRF guard, blocking facade, retry, GitHub | none |
+| `stealth` | `TlsProfile::{Chrome,Firefox,Safari}` JA3/JA4 emulation via the `wreq` transport | `wreq`, `wreq-util` |
 
 ### Consumers
 
-Used by: kagi (1Password API), kekkai (NordVPN API), nami (web fetching),
-fumi (Slack REST), hibiki (metadata APIs)
+Used by: kagi (1Password API), kekkai (NordVPN API), nami / nami-core (web
+fetching, via `BlockingHttpClient`), fumi (Slack REST), hibiki (metadata APIs)
 
 ## Design Decisions
 
@@ -40,4 +51,14 @@ fumi (Slack REST), hibiki (metadata APIs)
   instead of hand-rolling its own `RetryConfig` + retry loop. See `retry.rs` for the
   contract; returns `RetryError<E>` (`Exhausted` / `NonRetryable`).
 - **get_raw()**: for non-JSON responses (HTML, binary)
+- **Sync over async (solve-once)**: `BlockingHttpClient` is the ONE blocking
+  entry point — it wraps the async `HttpClient` behind a current-thread runtime
+  rather than maintaining a second client. Sync consumers (nami-core) never grow
+  their own HTTP stack.
+- **SSRF is opt-in but DNS-aware**: `check_url_resolved` resolves the host and
+  re-classifies every resolved IP, so a domain that resolves to `169.254.169.254`
+  or `127.0.0.1` is rejected even though the URL string looked public.
+- **TLS fingerprint emulation is a feature, not a default**: `stealth` pulls in
+  `wreq` only when a caller needs Chrome/Firefox/Safari JA3/JA4 emulation; the
+  default build stays rustls-only with zero extra deps.
 - **Does NOT do** WebSocket, gRPC, or non-HTTP protocols
