@@ -12,6 +12,14 @@ license = "MIT"
 categories = ["web-programming::http-client"]
 keywords = ["http", "client", "api", "retry", "authentication"]
 
+[features]
+default = []
+# Browser TLS-fingerprint (JA3/JA4) emulation via wreq/BoringSSL. Off by
+# default so the standard build stays pure reqwest+rustls (no C/Go toolchain).
+# This is the pleme-io absorption of Obscura's `--features stealth` wreq swap;
+# select a browser fingerprint with `HttpClientBuilder::tls_profile`.
+stealth = ["dep:wreq", "dep:wreq-util"]
+
 [lints.clippy]
 pedantic = "warn"
 
@@ -28,10 +36,17 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 thiserror = "2.0"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "net", "rt"] }
+# URL parsing for the SSRF guard (typed scheme/host inspection). Already pulled
+# in transitively by reqwest; declared explicitly so ssrf.rs owns it.
+url = "2"
+# Stealth-only: browser TLS fingerprint emulation. Pulls BoringSSL — gated
+# behind the `stealth` feature so the default build never compiles it.
+wreq = { version = "5.3", optional = true, features = ["json"] }
+wreq-util = { version = "2", optional = true }
 
 [dev-dependencies]
 assert_matches = "1.5.0"
 pretty_assertions = "1.4.1"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

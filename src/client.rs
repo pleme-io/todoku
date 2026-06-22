@@ -3,6 +3,7 @@
 use crate::auth::{Auth, NoAuth};
 use crate::error::{Result, TodokuError};
 use crate::retry::RetryPolicy;
+use crate::tls::TlsProfile;
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -11,11 +12,148 @@ use std::time::Duration;
 /// Shared HTTP client with authentication and retry.
 #[derive(Clone)]
 pub struct HttpClient {
-    inner: reqwest::Client,
+    inner: Transport,
     base_url: Option<String>,
     auth: Arc<dyn Auth>,
     retry: RetryPolicy,
     default_headers: HeaderMap,
+    /// When `true`, every resolved request URL is run through
+    /// [`crate::ssrf::check_url`] before sending; a forbidden target returns
+    /// [`TodokuError::Ssrf`] instead of a network call. Off by default.
+    ssrf_guard: bool,
+}
+
+/// The concrete HTTP/TLS stack behind an [`HttpClient`].
+///
+/// `Reqwest` (rustls) is always available; `Stealth` (wreq / browser
+/// JA3-JA4 emulation) is only compiled with the `stealth` feature. The
+/// [`TlsProfile`] on the builder selects which one `build()` constructs.
+#[derive(Clone)]
+enum Transport {
+    Reqwest(reqwest::Client),
+    #[cfg(feature = "stealth")]
+    Stealth(wreq::Client),
+}
+
+/// A completed HTTP exchange, normalized across transports.
+struct RawResponse {
+    status: u16,
+    body: String,
+}
+
+/// A transport-level send failure, carrying whether it was a timeout so the
+/// retry loop can decide to retry without depending on a concrete error type.
+struct TransportError {
+    is_timeout: bool,
+    err: TodokuError,
+}
+
+impl Transport {
+    /// Send one request and read the full body, regardless of status code.
+    /// The caller's retry loop interprets the status; transport errors carry
+    /// `is_timeout` so the loop stays transport-agnostic.
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        headers: HeaderMap,
+        body: Option<&serde_json::Value>,
+    ) -> std::result::Result<RawResponse, TransportError> {
+        match self {
+            Transport::Reqwest(c) => {
+                let mut req = c.request(method, url).headers(headers);
+                if let Some(b) = body {
+                    req = req.json(b);
+                }
+                let resp = req.send().await.map_err(|e| TransportError {
+                    is_timeout: e.is_timeout(),
+                    err: TodokuError::Request(e),
+                })?;
+                let status = resp.status().as_u16();
+                let body = resp.text().await.map_err(|e| TransportError {
+                    is_timeout: false,
+                    err: TodokuError::Request(e),
+                })?;
+                Ok(RawResponse { status, body })
+            }
+            #[cfg(feature = "stealth")]
+            Transport::Stealth(c) => {
+                let wmethod =
+                    wreq::Method::from_bytes(method.as_str().as_bytes()).map_err(|_| {
+                        TransportError {
+                            is_timeout: false,
+                            err: TodokuError::StealthRequest(
+                                "invalid HTTP method for stealth transport".to_string(),
+                            ),
+                        }
+                    })?;
+                let mut wheaders = wreq::header::HeaderMap::new();
+                for (k, v) in headers.iter() {
+                    if let (Ok(name), Ok(val)) = (
+                        wreq::header::HeaderName::from_bytes(k.as_str().as_bytes()),
+                        wreq::header::HeaderValue::from_bytes(v.as_bytes()),
+                    ) {
+                        wheaders.insert(name, val);
+                    }
+                }
+                let mut req = c.request(wmethod, url).headers(wheaders);
+                if let Some(b) = body {
+                    req = req.json(b);
+                }
+                let resp = req.send().await.map_err(|e| TransportError {
+                    is_timeout: e.is_timeout(),
+                    err: TodokuError::stealth(e),
+                })?;
+                let status = resp.status().as_u16();
+                let body = resp.text().await.map_err(|e| TransportError {
+                    is_timeout: false,
+                    err: TodokuError::stealth(e),
+                })?;
+                Ok(RawResponse { status, body })
+            }
+        }
+    }
+}
+
+/// Build a browser-emulating (wreq/BoringSSL) client for an emulated profile.
+///
+/// NOTE: the [`wreq_util::Emulation`] variant names track browser releases —
+/// verify them against the pinned `wreq-util` version when bumping.
+#[cfg(feature = "stealth")]
+fn build_stealth_client(
+    profile: TlsProfile,
+    timeout: Duration,
+    user_agent: &str,
+    headers: &HeaderMap,
+) -> Result<wreq::Client> {
+    use wreq_util::Emulation;
+    let emulation = match profile {
+        TlsProfile::Chrome => Emulation::Chrome136,
+        TlsProfile::Firefox => Emulation::Firefox136,
+        TlsProfile::Safari => Emulation::Safari18,
+        TlsProfile::Rustls => {
+            return Err(TodokuError::UnsupportedTlsProfile {
+                profile: TlsProfile::Rustls.as_str(),
+                reason: "rustls is served by the default transport, not the stealth transport",
+            });
+        }
+    };
+    let mut wheaders = wreq::header::HeaderMap::new();
+    for (k, v) in headers.iter() {
+        if let (Ok(name), Ok(val)) = (
+            wreq::header::HeaderName::from_bytes(k.as_str().as_bytes()),
+            wreq::header::HeaderValue::from_bytes(v.as_bytes()),
+        ) {
+            wheaders.insert(name, val);
+        }
+    }
+    wreq::Client::builder()
+        .emulation(emulation)
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .default_headers(wheaders)
+        .build()
+        .map_err(TodokuError::stealth)
 }
 
 /// Builder for `HttpClient`.
@@ -26,6 +164,8 @@ pub struct HttpClientBuilder {
     timeout: Duration,
     user_agent: String,
     default_headers: HeaderMap,
+    tls_profile: TlsProfile,
+    ssrf_guard: bool,
 }
 
 impl Default for HttpClientBuilder {
@@ -37,6 +177,9 @@ impl Default for HttpClientBuilder {
             timeout: Duration::from_secs(30),
             user_agent: format!("pleme-io/todoku {}", env!("CARGO_PKG_VERSION")),
             default_headers: HeaderMap::new(),
+            tls_profile: TlsProfile::default(),
+            // Off by default to preserve existing behavior — consumers opt in.
+            ssrf_guard: false,
         }
     }
 }
@@ -85,26 +228,81 @@ impl HttpClientBuilder {
         self
     }
 
+    /// Select the TLS fingerprint the client presents on the wire.
+    ///
+    /// The default ([`TlsProfile::Rustls`]) is the honest reqwest+rustls
+    /// fingerprint. Browser-emulating profiles ([`TlsProfile::Chrome`] etc.)
+    /// require the `stealth` feature; requesting one without it makes
+    /// [`Self::build`] return [`TodokuError::UnsupportedTlsProfile`] rather
+    /// than silently using the rustls fingerprint.
+    #[must_use]
+    pub fn tls_profile(mut self, profile: TlsProfile) -> Self {
+        self.tls_profile = profile;
+        self
+    }
+
+    /// Enable (or disable) the SSRF guard.
+    ///
+    /// When enabled, every resolved request URL is checked by
+    /// [`crate::ssrf::check_url`] before any network call: non-http(s) schemes,
+    /// missing hosts, and IP-literal hosts in private / loopback / link-local /
+    /// CGNAT / ULA / multicast / cloud-metadata ranges are rejected with a
+    /// typed [`TodokuError::Ssrf`]. Off by default to preserve existing
+    /// behavior; hostname DNS-time resolution is a documented follow-up.
+    #[must_use]
+    pub fn ssrf_guard(mut self, enabled: bool) -> Self {
+        self.ssrf_guard = enabled;
+        self
+    }
+
     /// Build the `HttpClient`.
     ///
     /// # Errors
     ///
-    /// Returns `TodokuError::Request` if the underlying reqwest client fails to build.
+    /// Returns `TodokuError::Request` if the underlying client fails to build,
+    /// or `TodokuError::UnsupportedTlsProfile` if an emulated [`TlsProfile`]
+    /// was requested without the `stealth` feature.
     pub fn build(self) -> Result<HttpClient> {
-        let inner = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .user_agent(&self.user_agent)
-            .default_headers(self.default_headers.clone())
-            .build()
-            .map_err(TodokuError::Request)?;
-
+        let inner = self.build_transport()?;
         Ok(HttpClient {
             inner,
             base_url: self.base_url,
             auth: self.auth,
             retry: self.retry,
             default_headers: self.default_headers,
+            ssrf_guard: self.ssrf_guard,
         })
+    }
+
+    /// Construct the concrete transport for the selected [`TlsProfile`].
+    fn build_transport(&self) -> Result<Transport> {
+        if self.tls_profile.is_emulated() {
+            #[cfg(feature = "stealth")]
+            {
+                let c = build_stealth_client(
+                    self.tls_profile,
+                    self.timeout,
+                    &self.user_agent,
+                    &self.default_headers,
+                )?;
+                return Ok(Transport::Stealth(c));
+            }
+            #[cfg(not(feature = "stealth"))]
+            {
+                return Err(TodokuError::UnsupportedTlsProfile {
+                    profile: self.tls_profile.as_str(),
+                    reason: "rebuild todoku with the `stealth` feature to enable browser TLS emulation",
+                });
+            }
+        }
+
+        let c = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .user_agent(&self.user_agent)
+            .default_headers(self.default_headers.clone())
+            .build()
+            .map_err(TodokuError::Request)?;
+        Ok(Transport::Reqwest(c))
     }
 }
 
@@ -124,6 +322,27 @@ impl HttpClient {
                 format!("{base}/{path}")
             }
             None => path.to_string(),
+        }
+    }
+
+    /// Run the SSRF guard on a resolved URL when enabled — including DNS-time
+    /// resolution of hostname hosts ([`crate::ssrf::check_url_resolved`]).
+    ///
+    /// A no-op when `ssrf_guard` is off (preserving existing behavior). When on,
+    /// parses `url`, rejects forbidden IP-literal targets, and resolves hostname
+    /// hosts to re-check every address — blocking `metadata.google.internal`-style
+    /// names and DNS-rebinding hosts with [`TodokuError::Ssrf`]. A URL that fails
+    /// to parse passes through here — the underlying transport surfaces its own
+    /// typed error so the guard never masks a genuine malformed-URL signal.
+    async fn guard_url(&self, url: &str) -> Result<()> {
+        if !self.ssrf_guard {
+            return Ok(());
+        }
+        match url::Url::parse(url) {
+            Ok(parsed) => crate::ssrf::check_url_resolved(&parsed)
+                .await
+                .map_err(TodokuError::Ssrf),
+            Err(_) => Ok(()),
         }
     }
 
@@ -185,20 +404,48 @@ impl HttpClient {
         body: Option<&B>,
     ) -> Result<T> {
         let url = self.url(path);
+        self.guard_url(&url).await?;
+        let body_value = match body {
+            Some(b) => Some(serde_json::to_value(b)?),
+            None => None,
+        };
 
         for attempt in 0..=self.retry.max_retries {
             let mut headers = self.default_headers.clone();
             self.auth.apply(&mut headers);
 
-            let mut req = self.inner.request(method.clone(), &url).headers(headers);
-            if let Some(b) = body {
-                req = req.json(b);
-            }
+            match self
+                .inner
+                .send(method.clone(), &url, headers, body_value.as_ref())
+                .await
+            {
+                Ok(raw) => {
+                    if (200..300).contains(&raw.status) {
+                        let parsed: T = serde_json::from_str(&raw.body)?;
+                        return Ok(parsed);
+                    }
 
-            let response = match req.send().await {
-                Ok(r) => r,
-                Err(e) if e.is_timeout() => {
-                    if attempt < self.retry.max_retries {
+                    if self.retry.should_retry_status(raw.status)
+                        && attempt < self.retry.max_retries
+                    {
+                        let backoff = self.retry.backoff_for(attempt);
+                        tracing::warn!(
+                            status = raw.status,
+                            attempt,
+                            max = self.retry.max_retries,
+                            "retryable status, retrying in {backoff:?}"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+
+                    return Err(TodokuError::Http {
+                        status: raw.status,
+                        body: raw.body,
+                    });
+                }
+                Err(te) => {
+                    if te.is_timeout && attempt < self.retry.max_retries {
                         let backoff = self.retry.backoff_for(attempt);
                         tracing::warn!(
                             attempt,
@@ -208,36 +455,9 @@ impl HttpClient {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    return Err(TodokuError::Request(e));
+                    return Err(te.err);
                 }
-                Err(e) => return Err(TodokuError::Request(e)),
-            };
-
-            let status = response.status().as_u16();
-
-            if response.status().is_success() {
-                let body_text = response.text().await.map_err(TodokuError::Request)?;
-                let parsed: T = serde_json::from_str(&body_text)?;
-                return Ok(parsed);
             }
-
-            if self.retry.should_retry_status(status) && attempt < self.retry.max_retries {
-                let backoff = self.retry.backoff_for(attempt);
-                tracing::warn!(
-                    status,
-                    attempt,
-                    max = self.retry.max_retries,
-                    "retryable status, retrying in {backoff:?}"
-                );
-                tokio::time::sleep(backoff).await;
-                continue;
-            }
-
-            let body_text = response.text().await.unwrap_or_default();
-            return Err(TodokuError::Http {
-                status,
-                body: body_text,
-            });
         }
 
         Err(TodokuError::MaxRetries {
@@ -253,15 +473,20 @@ impl HttpClient {
     /// Returns `TodokuError::Request` on network failure.
     pub async fn get_raw(&self, path: &str) -> Result<reqwest::Response> {
         let url = self.url(path);
+        self.guard_url(&url).await?;
         let mut headers = self.default_headers.clone();
         self.auth.apply(&mut headers);
 
-        self.inner
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(TodokuError::Request)
+        match &self.inner {
+            Transport::Reqwest(c) => c
+                .get(&url)
+                .headers(headers)
+                .send()
+                .await
+                .map_err(TodokuError::Request),
+            #[cfg(feature = "stealth")]
+            Transport::Stealth(_) => Err(TodokuError::StealthRawUnsupported),
+        }
     }
 }
 
@@ -276,11 +501,12 @@ mod tests {
     #[test]
     fn url_resolution_with_leading_slash() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com/v1".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url("/items"), "https://api.example.com/v1/items");
     }
@@ -288,11 +514,12 @@ mod tests {
     #[test]
     fn url_resolution_without_leading_slash() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com/v1".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url("items"), "https://api.example.com/v1/items");
     }
@@ -300,11 +527,12 @@ mod tests {
     #[test]
     fn url_no_base() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: None,
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(
             client.url("https://example.com/api"),
@@ -315,11 +543,12 @@ mod tests {
     #[test]
     fn url_base_with_trailing_slash() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com/v1/".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         // Trailing slash on base and leading slash on path should not double-slash
         assert_eq!(client.url("/items"), "https://api.example.com/v1/items");
@@ -328,11 +557,12 @@ mod tests {
     #[test]
     fn url_base_with_trailing_slash_path_no_leading() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com/v1/".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url("items"), "https://api.example.com/v1/items");
     }
@@ -340,11 +570,12 @@ mod tests {
     #[test]
     fn url_empty_path() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url(""), "https://api.example.com/");
     }
@@ -352,11 +583,12 @@ mod tests {
     #[test]
     fn url_nested_path() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(
             client.url("/a/b/c/d"),
@@ -367,11 +599,12 @@ mod tests {
     #[test]
     fn url_with_query_params() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com/v1".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(
             client.url("/search?q=hello&page=1"),
@@ -382,11 +615,12 @@ mod tests {
     #[test]
     fn url_no_base_returns_path_as_is() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: None,
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url("/relative/path"), "/relative/path");
     }
@@ -394,11 +628,12 @@ mod tests {
     #[test]
     fn url_empty_base() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some(String::new()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         assert_eq!(client.url("/items"), "/items");
     }
@@ -406,11 +641,12 @@ mod tests {
     #[test]
     fn url_base_multiple_trailing_slashes() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com///".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         // trim_end_matches('/') removes all trailing slashes
         assert_eq!(
@@ -422,11 +658,12 @@ mod tests {
     #[test]
     fn url_path_multiple_leading_slashes() {
         let client = HttpClient {
-            inner: reqwest::Client::new(),
+            inner: Transport::Reqwest(reqwest::Client::new()),
             base_url: Some("https://api.example.com".into()),
             auth: Arc::new(NoAuth),
             retry: RetryPolicy::none(),
             default_headers: HeaderMap::new(),
+            ssrf_guard: false,
         };
         // trim_start_matches('/') removes all leading slashes from path
         assert_eq!(
@@ -958,5 +1195,194 @@ mod tests {
             client.url("/search?q=hello%20world"),
             "https://api.example.com/search?q=hello%20world"
         );
+    }
+
+    // --- TLS profile ---
+
+    #[test]
+    fn builder_default_tls_profile_is_rustls() {
+        let b = HttpClientBuilder::new();
+        assert_eq!(b.tls_profile, TlsProfile::Rustls);
+    }
+
+    #[test]
+    fn builder_sets_tls_profile() {
+        let b = HttpClientBuilder::new().tls_profile(TlsProfile::Chrome);
+        assert_eq!(b.tls_profile, TlsProfile::Chrome);
+    }
+
+    #[test]
+    fn rustls_profile_builds_a_reqwest_transport() {
+        let client = HttpClient::builder()
+            .tls_profile(TlsProfile::Rustls)
+            .build()
+            .unwrap();
+        assert!(matches!(client.inner, Transport::Reqwest(_)));
+    }
+
+    #[test]
+    fn default_profile_builds() {
+        // No explicit profile -> rustls -> builds.
+        let client = HttpClient::builder().build();
+        assert!(client.is_ok());
+    }
+
+    #[cfg(not(feature = "stealth"))]
+    #[test]
+    fn emulated_profile_without_stealth_is_typed_error() {
+        for profile in [TlsProfile::Chrome, TlsProfile::Firefox, TlsProfile::Safari] {
+            match HttpClient::builder().tls_profile(profile).build() {
+                Ok(_) => panic!("emulated profile must not build without the stealth feature"),
+                Err(err) => {
+                    assert_matches::assert_matches!(
+                        err,
+                        TodokuError::UnsupportedTlsProfile { .. }
+                    );
+                    assert!(err.to_string().contains(profile.as_str()));
+                }
+            }
+        }
+    }
+
+    // --- SSRF guard wiring ---
+
+    use crate::ssrf::SsrfReason;
+
+    #[test]
+    fn builder_default_ssrf_guard_off() {
+        let b = HttpClientBuilder::new();
+        assert!(!b.ssrf_guard);
+    }
+
+    #[test]
+    fn builder_sets_ssrf_guard() {
+        let b = HttpClientBuilder::new().ssrf_guard(true);
+        assert!(b.ssrf_guard);
+    }
+
+    #[test]
+    fn built_client_preserves_ssrf_guard() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        assert!(client.ssrf_guard);
+    }
+
+    #[test]
+    fn cloned_client_preserves_ssrf_guard() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        assert!(client.clone().ssrf_guard);
+    }
+
+    // `guard_url` is async (it does DNS-time resolution for hostname hosts), so
+    // these are `#[tokio::test]`. The cases below use IP literals (no DNS) or an
+    // unresolvable `.invalid` host (RFC 6761 — deterministic, offline) to stay
+    // hermetic; the hostname→IP resolution path itself is covered in `ssrf`'s
+    // `resolved_*` tests against `localhost`.
+
+    #[tokio::test]
+    async fn guard_url_off_is_noop_for_forbidden_target() {
+        let client = HttpClient::builder().build().unwrap();
+        // Guard off (default) -> even a metadata URL passes the pre-flight check.
+        assert!(client.guard_url("http://169.254.169.254/").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_blocks_metadata() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        let err = client
+            .guard_url("http://169.254.169.254/")
+            .await
+            .unwrap_err();
+        assert_matches::assert_matches!(err, TodokuError::Ssrf(SsrfReason::CloudMetadata));
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_blocks_loopback() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        let err = client
+            .guard_url("http://127.0.0.1:8080/admin")
+            .await
+            .unwrap_err();
+        assert_matches::assert_matches!(err, TodokuError::Ssrf(SsrfReason::Loopback));
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_blocks_private() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        let err = client
+            .guard_url("https://10.1.2.3/internal")
+            .await
+            .unwrap_err();
+        assert_matches::assert_matches!(err, TodokuError::Ssrf(SsrfReason::Private));
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_allows_public_ip() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        assert!(client.guard_url("https://8.8.8.8/").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_allows_unresolvable_host() {
+        // A hostname host exercises the DNS path; `.invalid` never resolves
+        // (RFC 6761), so it passes — the transport surfaces the real error.
+        // Offline-deterministic, unlike a real public hostname.
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        assert!(
+            client
+                .guard_url("https://nonexistent.invalid/v1")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn guard_url_on_blocks_non_http_scheme() {
+        let client = HttpClient::builder().ssrf_guard(true).build().unwrap();
+        let err = client.guard_url("ftp://example.com/x").await.unwrap_err();
+        assert_matches::assert_matches!(err, TodokuError::Ssrf(SsrfReason::NonHttpScheme));
+    }
+
+    #[tokio::test]
+    async fn request_with_guard_blocks_before_send() {
+        // base_url is a metadata endpoint; the guard must fire before any
+        // network call, returning a typed Ssrf error (never a Request error).
+        let client = HttpClient::builder()
+            .base_url("http://169.254.169.254")
+            .ssrf_guard(true)
+            .build()
+            .unwrap();
+        let res: Result<serde_json::Value> = client.get("/latest/meta-data/").await;
+        assert_matches::assert_matches!(
+            res,
+            Err(TodokuError::Ssrf(SsrfReason::CloudMetadata))
+        );
+    }
+
+    #[tokio::test]
+    async fn get_raw_with_guard_blocks_before_send() {
+        let client = HttpClient::builder()
+            .base_url("http://127.0.0.1:9")
+            .ssrf_guard(true)
+            .build()
+            .unwrap();
+        let res = client.get_raw("/").await;
+        assert_matches::assert_matches!(res, Err(TodokuError::Ssrf(SsrfReason::Loopback)));
+    }
+
+    #[tokio::test]
+    async fn get_raw_without_guard_attempts_send() {
+        // Guard off: the loopback URL is NOT pre-empted by the SSRF guard. The
+        // connection to a dead port fails with a transport (Request) error, not
+        // an Ssrf error — proving the guard did not intervene.
+        let client = HttpClient::builder()
+            .base_url("http://127.0.0.1:9")
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let res = client.get_raw("/").await;
+        match res {
+            Err(TodokuError::Ssrf(_)) => panic!("guard fired while disabled"),
+            Err(_) | Ok(_) => {}
+        }
     }
 }

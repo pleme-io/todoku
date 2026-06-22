@@ -4,13 +4,19 @@
 //! builder pattern, pluggable auth, and exponential-backoff retry.
 
 pub mod auth;
+pub mod blocking;
 pub mod client;
 pub mod error;
 pub mod github;
 pub mod retry;
+pub mod ssrf;
+pub mod tls;
 
 pub use auth::{Auth, BasicAuth, BearerToken, HeaderAuth, NoAuth};
+pub use blocking::{BlockingHttpClient, HttpResponse};
 pub use client::{HttpClient, HttpClientBuilder};
 pub use error::TodokuError;
 pub use github::{FileInfo, GitHubApi, GitHubClient, GitHubRepo, OwnerType};
 pub use retry::{retry_with_backoff, RetryError, RetryPolicy};
+pub use ssrf::{check_url, classify_ip, SsrfReason};
+pub use tls::TlsProfile;

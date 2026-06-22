@@ -24,6 +24,49 @@ pub enum TodokuError {
 
     #[error("timeout after {0:?}")]
     Timeout(std::time::Duration),
+
+    /// Building the blocking facade's tokio runtime failed (see
+    /// [`crate::BlockingHttpClient`]).
+    #[error("failed to build blocking runtime: {0}")]
+    Runtime(String),
+
+    /// The SSRF guard rejected the request target. Returned only when the
+    /// client was built with `ssrf_guard(true)`; the wrapped [`SsrfReason`]
+    /// names exactly which forbidden class the target fell into.
+    ///
+    /// [`SsrfReason`]: crate::ssrf::SsrfReason
+    #[error("SSRF guard rejected target: {0}")]
+    Ssrf(crate::ssrf::SsrfReason),
+
+    /// A browser-emulating TLS profile was requested, but this build cannot
+    /// honor it. Rebuild todoku with the `stealth` feature to enable browser
+    /// TLS fingerprinting. This is a typed signal — todoku never silently
+    /// falls back to the honest rustls fingerprint when an emulated one was
+    /// asked for.
+    #[error("unsupported TLS profile `{profile}`: {reason}")]
+    UnsupportedTlsProfile {
+        profile: &'static str,
+        reason: &'static str,
+    },
+
+    /// The browser-emulating (stealth) transport failed.
+    #[cfg(feature = "stealth")]
+    #[error("stealth transport request failed: {0}")]
+    StealthRequest(String),
+
+    /// `get_raw` returns a streaming `reqwest::Response`, which the stealth
+    /// (wreq) transport cannot produce. Use `get` / `request` instead.
+    #[cfg(feature = "stealth")]
+    #[error("get_raw is unavailable on the stealth transport; use get/request")]
+    StealthRawUnsupported,
+}
+
+#[cfg(feature = "stealth")]
+impl TodokuError {
+    /// Wrap a wreq transport error.
+    pub(crate) fn stealth(e: wreq::Error) -> Self {
+        Self::StealthRequest(e.to_string())
+    }
 }
 
 impl TodokuError {
