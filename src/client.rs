@@ -2,7 +2,7 @@
 
 use crate::auth::{Auth, NoAuth};
 use crate::error::{Result, TodokuError};
-use crate::retry::RetryPolicy;
+use crate::retry::{Idempotency, RetryPolicy};
 use crate::tls::TlsProfile;
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
@@ -39,6 +39,12 @@ enum Transport {
 struct RawResponse {
     status: u16,
     body: String,
+    /// The server's own `Retry-After`, parsed at the transport because the
+    /// header set is dropped when the body is consumed. `None` means the
+    /// server did not ask for a specific delay (or asked in the HTTP-date
+    /// form todoku does not parse — see [`crate::retry::parse_retry_after`]),
+    /// and the caller falls back to its exponential backoff.
+    retry_after: Option<std::time::Duration>,
 }
 
 /// A transport-level send failure, carrying whether it was a timeout so the
@@ -70,11 +76,20 @@ impl Transport {
                     err: TodokuError::Request(e),
                 })?;
                 let status = resp.status().as_u16();
+                let retry_after = resp
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(crate::retry::parse_retry_after);
                 let body = resp.text().await.map_err(|e| TransportError {
                     is_timeout: false,
                     err: TodokuError::Request(e),
                 })?;
-                Ok(RawResponse { status, body })
+                Ok(RawResponse {
+                    status,
+                    body,
+                    retry_after,
+                })
             }
             #[cfg(feature = "stealth")]
             Transport::Stealth(c) => {
@@ -105,11 +120,20 @@ impl Transport {
                     err: TodokuError::stealth(e),
                 })?;
                 let status = resp.status().as_u16();
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(crate::retry::parse_retry_after);
                 let body = resp.text().await.map_err(|e| TransportError {
                     is_timeout: false,
                     err: TodokuError::stealth(e),
                 })?;
-                Ok(RawResponse { status, body })
+                Ok(RawResponse {
+                    status,
+                    body,
+                    retry_after,
+                })
             }
         }
     }
@@ -397,11 +421,39 @@ impl HttpClient {
     ///
     /// Returns `TodokuError` on network failure, non-success status, max retries exceeded,
     /// or deserialization failure.
+    /// Execute a request, deriving retry-safety from the method's own HTTP
+    /// semantics ([`Idempotency::Inherent`]).
+    ///
+    /// GET/PUT/DELETE/HEAD/OPTIONS retry; **POST and PATCH do not**, because
+    /// re-sending them can duplicate an effect the server already applied.
+    /// To opt a POST into retrying, use [`Self::request_with_idempotency`]
+    /// with a key the target API actually honors.
     pub async fn request<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         method: reqwest::Method,
         path: &str,
         body: Option<&B>,
+    ) -> Result<T> {
+        self.request_with_idempotency(method, path, body, &Idempotency::Inherent)
+            .await
+    }
+
+    /// Execute a request with an explicit idempotency declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TodokuError` on network failure, non-success status, max
+    /// retries exceeded, or deserialization failure — and
+    /// [`TodokuError::Indeterminate`] when a non-idempotent request fails in a
+    /// way that cannot distinguish "never applied" from "applied, response
+    /// lost". A caller receiving `Indeterminate` must **re-observe** the
+    /// remote; it must never re-send.
+    pub async fn request_with_idempotency<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&B>,
+        idempotency: &Idempotency,
     ) -> Result<T> {
         let url = self.url(path);
         self.guard_url(&url).await?;
@@ -410,9 +462,19 @@ impl HttpClient {
             None => None,
         };
 
+        // DERIVED, not authored — see RetryPolicy::is_retry_safe. When this is
+        // false the loop below runs exactly once, so a non-idempotent write is
+        // never re-sent no matter what the status or the policy says.
+        let retry_safe = RetryPolicy::is_retry_safe(&method, idempotency);
+
         for attempt in 0..=self.retry.max_retries {
             let mut headers = self.default_headers.clone();
             self.auth.apply(&mut headers);
+            if let Idempotency::Key(key) = idempotency
+                && let Ok(v) = reqwest::header::HeaderValue::from_str(key)
+            {
+                headers.insert("idempotency-key", v);
+            }
 
             match self
                 .inner
@@ -425,14 +487,22 @@ impl HttpClient {
                         return Ok(parsed);
                     }
 
-                    if self.retry.should_retry_status(raw.status)
+                    // A retryable status on an unsafe request is still a
+                    // refusal to re-send: 503 means "not now", but we cannot
+                    // know the first attempt did not land.
+                    if retry_safe
+                        && self.retry.should_retry_status(raw.status)
                         && attempt < self.retry.max_retries
                     {
-                        let backoff = self.retry.backoff_for(attempt);
+                        // The server's own ask wins over our guess.
+                        let backoff = raw
+                            .retry_after
+                            .unwrap_or_else(|| self.retry.backoff_for(attempt));
                         tracing::warn!(
                             status = raw.status,
                             attempt,
                             max = self.retry.max_retries,
+                            server_asked = raw.retry_after.is_some(),
                             "retryable status, retrying in {backoff:?}"
                         );
                         tokio::time::sleep(backoff).await;
@@ -445,15 +515,30 @@ impl HttpClient {
                     });
                 }
                 Err(te) => {
-                    if te.is_timeout && attempt < self.retry.max_retries {
-                        let backoff = self.retry.backoff_for(attempt);
-                        tracing::warn!(
-                            attempt,
-                            max = self.retry.max_retries,
-                            "request timeout, retrying in {backoff:?}"
-                        );
-                        tokio::time::sleep(backoff).await;
-                        continue;
+                    if te.is_timeout {
+                        if retry_safe && attempt < self.retry.max_retries {
+                            let backoff = self.retry.backoff_for(attempt);
+                            tracing::warn!(
+                                attempt,
+                                max = self.retry.max_retries,
+                                "request timeout, retrying in {backoff:?}"
+                            );
+                            tokio::time::sleep(backoff).await;
+                            continue;
+                        }
+                        if !retry_safe {
+                            // The whole point: neither Ok nor a plain Err is
+                            // true here. Say so instead of guessing.
+                            tracing::warn!(
+                                method = %method,
+                                url = %url,
+                                "timeout on a non-idempotent request — outcome unknown, not retrying"
+                            );
+                            return Err(TodokuError::Indeterminate {
+                                method: method.to_string(),
+                                url,
+                            });
+                        }
                     }
                     return Err(te.err);
                 }
@@ -487,6 +572,120 @@ impl HttpClient {
             #[cfg(feature = "stealth")]
             Transport::Stealth(_) => Err(TodokuError::StealthRawUnsupported),
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_safety_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A socket that accepts and NEVER answers, counting accepts. The count is
+    /// the evidence: it measures how many times the request actually hit the
+    /// wire, which is the only thing that distinguishes "did not retry" from
+    /// "retried and we could not tell".
+    async fn hanging_server() -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(stream); // hold open, never write a response
+            }
+        });
+        (format!("http://{addr}"), accepts)
+    }
+
+    fn fast_retry() -> RetryPolicy {
+        RetryPolicy {
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(5),
+            ..Default::default()
+        }
+    }
+
+    /// THE REGRESSION THIS FIX EXISTS FOR. Before it, a POST whose response was
+    /// lost to a timeout was silently re-sent up to `max_retries` times — so a
+    /// Jira comment the server had already accepted appeared 2-4 times while
+    /// the caller saw one `Ok`. Delete the `retry_safe` gate in `request_with_
+    /// idempotency` and this goes red on the accept count (4, not 1).
+    #[tokio::test]
+    async fn post_timeout_sends_exactly_once_and_reports_indeterminate() {
+        let (base, accepts) = hanging_server().await;
+        let client = HttpClient::builder()
+            .base_url(base)
+            .timeout(Duration::from_millis(200))
+            .retry(fast_retry())
+            .build()
+            .unwrap();
+
+        let out: Result<serde_json::Value> = client
+            .post("/comment", &serde_json::json!({ "body": "hi" }))
+            .await;
+
+        assert!(
+            matches!(out, Err(TodokuError::Indeterminate { .. })),
+            "a lost POST response is neither Ok nor a plain Err; got {out:?}"
+        );
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            1,
+            "a non-idempotent POST must reach the wire exactly once"
+        );
+    }
+
+    /// The control that keeps the gate from being vacuous: if this passed while
+    /// the test above also passed for the wrong reason (retries disabled
+    /// wholesale), the fix would be a regression dressed as a safety property.
+    #[tokio::test]
+    async fn get_timeout_still_retries() {
+        let (base, accepts) = hanging_server().await;
+        let client = HttpClient::builder()
+            .base_url(base)
+            .timeout(Duration::from_millis(200))
+            .retry(fast_retry())
+            .build()
+            .unwrap();
+
+        let out: Result<serde_json::Value> = client.get("/items").await;
+        assert!(out.is_err());
+        assert!(
+            accepts.load(Ordering::SeqCst) > 1,
+            "GET is idempotent and must still retry; saw {} attempt(s)",
+            accepts.load(Ordering::SeqCst)
+        );
+    }
+
+    /// An explicit key is the ONE way to opt a POST back into retrying.
+    #[tokio::test]
+    async fn post_with_idempotency_key_may_retry() {
+        let (base, accepts) = hanging_server().await;
+        let client = HttpClient::builder()
+            .base_url(base)
+            .timeout(Duration::from_millis(200))
+            .retry(fast_retry())
+            .build()
+            .unwrap();
+
+        let out: Result<serde_json::Value> = client
+            .request_with_idempotency(
+                reqwest::Method::POST,
+                "/comment",
+                Some(&serde_json::json!({ "body": "hi" })),
+                &Idempotency::Key("stable-key-1".into()),
+            )
+            .await;
+
+        assert!(out.is_err());
+        assert!(
+            accepts.load(Ordering::SeqCst) > 1,
+            "a keyed POST is safe to re-send; saw {} attempt(s)",
+            accepts.load(Ordering::SeqCst)
+        );
     }
 }
 

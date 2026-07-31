@@ -25,6 +25,29 @@ pub enum TodokuError {
     #[error("timeout after {0:?}")]
     Timeout(std::time::Duration),
 
+    /// The request may or may not have been applied, and we cannot tell.
+    ///
+    /// Returned when a **non-idempotent** request (a POST/PATCH with no
+    /// idempotency key) fails in a way that does not distinguish "the server
+    /// never saw it" from "the server applied it and the response was lost" —
+    /// a transport timeout being the canonical case.
+    ///
+    /// This variant exists because the honest answer is neither `Ok` nor a
+    /// plain `Err`. Collapsing it into `Err` tells the caller the write did
+    /// not happen, which is a guess; retrying it duplicates the effect, which
+    /// is worse. A caller receiving this must **re-observe** the remote to
+    /// learn the truth — it must never silently re-send.
+    ///
+    /// Tier-honest: this makes the ambiguity *visible*, not absent. The
+    /// ambiguity itself is a fact about APIs that ship no idempotency key
+    /// (Jira and GitHub comment-create among them), so it is typed rather
+    /// than dissolved.
+    #[error(
+        "indeterminate: {method} {url} may or may not have been applied \
+         (non-idempotent request, no idempotency key) — re-observe, do not re-send"
+    )]
+    Indeterminate { method: String, url: String },
+
     /// Building the blocking facade's tokio runtime failed (see
     /// [`crate::BlockingHttpClient`]).
     #[error("failed to build blocking runtime: {0}")]

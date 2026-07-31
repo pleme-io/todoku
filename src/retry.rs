@@ -76,10 +76,97 @@ impl RetryPolicy {
     }
 
     /// Check if a status code should be retried.
+    ///
+    /// **This is only half the question.** A status being retryable says
+    /// nothing about whether re-sending *this* request is safe — see
+    /// [`RetryPolicy::is_retry_safe`], which is the predicate the client
+    /// actually gates on. Retrying on status alone is what duplicates a
+    /// comment the server already accepted.
     #[must_use]
     pub fn should_retry_status(&self, status: u16) -> bool {
         self.retry_statuses.contains(&status)
     }
+
+    /// Whether re-sending this request can duplicate an effect.
+    ///
+    /// **Derived, never authored** — there is no field in which a caller can
+    /// declare a bare POST safe to retry. Safety is a function of the HTTP
+    /// method's own semantics plus whether the caller supplied an idempotency
+    /// key, so the "I promise this POST is fine" state has no representation.
+    /// This is the same shape as banken's `(defguarita)` legality: the class
+    /// is computed from the act, not claimed alongside it.
+    ///
+    /// Tier-honest: this closes the class *on todoku's default path* — every
+    /// convenience verb derives its own [`Idempotency`], so reaching the
+    /// dangerous state requires explicitly naming a key via
+    /// [`crate::HttpClient::request_with_idempotency`], which is exactly when
+    /// it is legal. It is **not** truly-unrepresentable: a caller who names a
+    /// key the server does not honor still gets a duplicate, and that is a
+    /// fact about the remote, not about this type.
+    #[must_use]
+    pub fn is_retry_safe(method: &reqwest::Method, idempotency: &Idempotency) -> bool {
+        match idempotency {
+            // The caller took responsibility with a server-honored key.
+            Idempotency::Key(_) => true,
+            Idempotency::None => false,
+            // RFC 9110 §9.2.2 idempotent methods: re-sending cannot add an
+            // effect the first send did not already have.
+            Idempotency::Inherent => matches!(
+                *method,
+                reqwest::Method::GET
+                    | reqwest::Method::HEAD
+                    | reqwest::Method::PUT
+                    | reqwest::Method::DELETE
+                    | reqwest::Method::OPTIONS
+                    | reqwest::Method::TRACE
+            ),
+        }
+    }
+}
+
+/// Whether re-sending a request can duplicate its effect.
+///
+/// Carried per-request rather than per-client because it is a property of the
+/// *operation*, not of the connection: the same client posts a Jira comment
+/// (duplicable) and PUTs a Confluence page (version-checked, not duplicable).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Idempotency {
+    /// Safety follows the HTTP method's own RFC 9110 semantics.
+    ///
+    /// The default, and correct for every verb except POST/PATCH — for those
+    /// it resolves to *not safe*, which is why the default is safe.
+    #[default]
+    Inherent,
+    /// The caller supplied a key the server deduplicates on, so a re-send is
+    /// safe even for POST/PATCH. The key is sent as `Idempotency-Key`.
+    ///
+    /// Only pass this when the target API actually honors it — Jira's and
+    /// GitHub's comment-create endpoints do **not**.
+    Key(String),
+    /// Explicitly not idempotent and no key available: never auto-retry.
+    ///
+    /// A timeout here is genuinely undecidable — the request may or may not
+    /// have been applied — and surfaces as [`crate::TodokuError::Indeterminate`]
+    /// rather than being retried or reported as a plain failure.
+    None,
+}
+
+/// Parse a `Retry-After` header value into a delay.
+///
+/// Handles the **delta-seconds** form (RFC 9110 §10.2.3), which is what every
+/// rate-limited JSON API in the fleet's path emits on 429.
+///
+/// Tier-honest limit: the alternative **HTTP-date** form is deliberately NOT
+/// parsed — doing so needs an RFC 9110 IMF-fixdate parser, and pulling a date
+/// crate here would ripple through `Cargo.gen.lock` for a form no upstream we
+/// call actually sends. An unparseable value returns `None` and the caller
+/// falls back to exponential backoff, which is safe (never shorter than the
+/// server asked for is not guaranteed — state that plainly rather than imply
+/// full compliance).
+#[must_use]
+pub fn parse_retry_after(value: &str) -> Option<Duration> {
+    let secs: u64 = value.trim().parse().ok()?;
+    Some(Duration::from_secs(secs))
 }
 
 /// Error returned by [`retry_with_backoff`] when the operation cannot be
@@ -189,6 +276,73 @@ where
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
+mod retry_safety_tests {
+    use super::*;
+    use reqwest::Method;
+
+    /// ALL-VARIANTS PROOF. Every (method × idempotency) cell is asserted, so a
+    /// new method or a new `Idempotency` arm cannot land without a row here —
+    /// the matrix fails the build rather than silently defaulting to "safe".
+    #[test]
+    fn retry_safety_matrix_is_exhaustive() {
+        let idempotent = [
+            Method::GET,
+            Method::HEAD,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::TRACE,
+        ];
+        let effectful = [Method::POST, Method::PATCH];
+
+        for m in &idempotent {
+            assert!(
+                RetryPolicy::is_retry_safe(m, &Idempotency::Inherent),
+                "{m} is idempotent per RFC 9110 and must retry"
+            );
+        }
+        for m in &effectful {
+            assert!(
+                !RetryPolicy::is_retry_safe(m, &Idempotency::Inherent),
+                "{m} can duplicate an effect and must NOT auto-retry"
+            );
+            // A key the server honors is the ONLY way to opt in.
+            assert!(RetryPolicy::is_retry_safe(m, &Idempotency::Key("k".into())));
+            assert!(!RetryPolicy::is_retry_safe(m, &Idempotency::None));
+        }
+    }
+
+    /// The default must be the SAFE one. If `Idempotency::default()` ever moves
+    /// to an arm that permits retrying a POST, every existing caller silently
+    /// regains the duplicate-write hazard — so pin it.
+    #[test]
+    fn default_idempotency_never_retries_a_post() {
+        assert_eq!(Idempotency::default(), Idempotency::Inherent);
+        assert!(!RetryPolicy::is_retry_safe(
+            &Method::POST,
+            &Idempotency::default()
+        ));
+    }
+
+    #[test]
+    fn retry_after_parses_delta_seconds() {
+        assert_eq!(parse_retry_after("120"), Some(Duration::from_secs(120)));
+        assert_eq!(parse_retry_after("  5 "), Some(Duration::from_secs(5)));
+        assert_eq!(parse_retry_after("0"), Some(Duration::ZERO));
+    }
+
+    /// The documented limit, asserted rather than merely written down: the
+    /// HTTP-date form is NOT parsed, and returns None so the caller falls back
+    /// to exponential backoff instead of pretending to comply.
+    #[test]
+    fn retry_after_http_date_form_is_honestly_unparsed() {
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        assert_eq!(parse_retry_after(""), None);
+        assert_eq!(parse_retry_after("soon"), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

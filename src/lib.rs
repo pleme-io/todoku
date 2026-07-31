@@ -17,6 +17,6 @@ pub use blocking::{BlockingHttpClient, HttpResponse};
 pub use client::{HttpClient, HttpClientBuilder};
 pub use error::TodokuError;
 pub use github::{FileInfo, GitHubApi, GitHubClient, GitHubRepo, OwnerType};
-pub use retry::{retry_with_backoff, RetryError, RetryPolicy};
+pub use retry::{parse_retry_after, retry_with_backoff, Idempotency, RetryError, RetryPolicy};
 pub use ssrf::{check_url, classify_ip, SsrfReason};
 pub use tls::TlsProfile;
