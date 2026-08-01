@@ -31,7 +31,33 @@ strip = true
 
 [dependencies]
 async-trait = "0.1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "cookies", "gzip", "brotli"] }
+# ★ `default-features = false` is load-bearing, not tidiness.
+#
+# Cargo features are ADDITIVE. Asking for `rustls-tls` does not turn off
+# reqwest's default `default-tls`, so the graph carried BOTH stacks —
+# `hyper-rustls` AND `hyper-tls` — and native-tls dragged in `openssl-sys`.
+# That contradicted the comment fifteen lines up ("the standard build stays
+# pure reqwest+rustls, no C/Go toolchain"), which described the intent
+# correctly and was false in the lockfile.
+#
+# It also broke a consumer's CI: mado depends on todoku transitively
+# (mado → nami-core → todoku), and `openssl-sys` cannot build in a nix
+# devShell that provides no openssl — measured 2026-08-01,
+# "openssl/opensslconf.h: No such file or directory".
+#
+# The re-listed features are reqwest 0.12's own defaults MINUS `default-tls`
+# (`charset`, `http2`, `macos-system-configuration`), so nothing else
+# changes shape.
+reqwest = { version = "0.12", default-features = false, features = [
+    "charset",
+    "http2",
+    "macos-system-configuration",
+    "json",
+    "rustls-tls",
+    "cookies",
+    "gzip",
+    "brotli",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
