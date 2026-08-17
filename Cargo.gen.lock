@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e2ee109ca9ce9a8e9965afa107e5cb0256af044df76936169015f168703613f8",
+  "cargo_lock_sha256": "67d0548246b88108a6232796a953ee339dd77568811a4298c8e9f90934446609",
   "manifest_sha256": {
-    "Cargo.toml": "666d953e0509083dbcb29adeaa449cb8b949f66c1d0953a0e6c71a0d196bcc37"
+    "Cargo.toml": "b9cb430943bb188540160090142bf3f7aaeeeda6567c0fb337955c6110151e3f"
   },
   "target_resolves": {
     "base": {
@@ -87,7 +87,7 @@
           "tokio"
         ]
       },
-      "async-trait-0.1.91": {
+      "async-trait-0.1.92": {
         "runtime_dependencies": [
           {
             "name": "proc_macro2",
@@ -228,11 +228,11 @@
           "std"
         ]
       },
-      "cc-1.4.0": {
+      "cc-1.4.3": {
         "runtime_dependencies": [
           {
             "name": "find_msvc_tools",
-            "package_key": "find-msvc-tools-0.1.9",
+            "package_key": "find-msvc-tools-0.1.11",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -320,7 +320,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "cookie-0.18.1": {
+      "cookie-0.18.2": {
         "runtime_dependencies": [
           {
             "name": "percent_encoding",
@@ -369,7 +369,7 @@
         "runtime_dependencies": [
           {
             "name": "cookie",
-            "package_key": "cookie-0.18.1",
+            "package_key": "cookie-0.18.2",
             "kind": "normal",
             "features": [
               "percent-encode"
@@ -634,7 +634,7 @@
           "std"
         ]
       },
-      "find-msvc-tools-0.1.9": {
+      "find-msvc-tools-0.1.11": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -714,11 +714,11 @@
           "std"
         ]
       },
-      "futures-channel-0.3.33": {
+      "futures-channel-0.3.34": {
         "runtime_dependencies": [
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -734,7 +734,7 @@
           "std"
         ]
       },
-      "futures-core-0.3.33": {
+      "futures-core-0.3.34": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
@@ -743,7 +743,7 @@
           "std"
         ]
       },
-      "futures-sink-0.3.33": {
+      "futures-sink-0.3.34": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
@@ -752,7 +752,7 @@
           "std"
         ]
       },
-      "futures-task-0.3.33": {
+      "futures-task-0.3.34": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
@@ -760,11 +760,11 @@
           "std"
         ]
       },
-      "futures-util-0.3.33": {
+      "futures-util-0.3.34": {
         "runtime_dependencies": [
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -774,7 +774,7 @@
           },
           {
             "name": "futures_task",
-            "package_key": "futures-task-0.3.33",
+            "package_key": "futures-task-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -950,7 +950,7 @@
           "wasm_js"
         ]
       },
-      "h2-0.4.15": {
+      "h2-0.4.16": {
         "runtime_dependencies": [
           {
             "name": "atomic_waker",
@@ -984,7 +984,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -994,7 +994,7 @@
           },
           {
             "name": "futures_sink",
-            "package_key": "futures-sink-0.3.33",
+            "package_key": "futures-sink-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1140,7 +1140,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "http-body-util-0.1.4": {
+      "http-body-util-0.1.5": {
         "runtime_dependencies": [
           {
             "name": "bytes",
@@ -1154,7 +1154,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1230,7 +1230,7 @@
           },
           {
             "name": "futures_channel",
-            "package_key": "futures-channel-0.3.33",
+            "package_key": "futures-channel-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1240,7 +1240,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1250,7 +1250,7 @@
           },
           {
             "name": "h2",
-            "package_key": "h2-0.4.15",
+            "package_key": "h2-0.4.16",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1448,7 +1448,7 @@
           "webpki-tokio"
         ]
       },
-      "icu_collections-2.2.0": {
+      "icu_collections-2.3.0": {
         "runtime_dependencies": [
           {
             "name": "displaydoc",
@@ -1462,7 +1462,7 @@
           },
           {
             "name": "potential_utf",
-            "package_key": "potential_utf-0.1.5",
+            "package_key": "potential_utf-0.1.6",
             "kind": "normal",
             "features": [
               "zerovec"
@@ -1508,7 +1508,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [
               "derive",
@@ -1523,7 +1523,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "icu_locale_core-2.2.0": {
+      "icu_locale_core-2.3.0": {
         "runtime_dependencies": [
           {
             "name": "displaydoc",
@@ -1537,7 +1537,7 @@
           },
           {
             "name": "litemap",
-            "package_key": "litemap-0.8.2",
+            "package_key": "litemap-0.8.3",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1547,7 +1547,7 @@
           },
           {
             "name": "tinystr",
-            "package_key": "tinystr-0.8.3",
+            "package_key": "tinystr-0.8.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1557,7 +1557,7 @@
           },
           {
             "name": "writeable",
-            "package_key": "writeable-0.6.3",
+            "package_key": "writeable-0.6.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1567,7 +1567,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1581,11 +1581,11 @@
           "zerovec"
         ]
       },
-      "icu_normalizer-2.2.0": {
+      "icu_normalizer-2.3.0": {
         "runtime_dependencies": [
           {
             "name": "icu_collections",
-            "package_key": "icu_collections-2.2.0",
+            "package_key": "icu_collections-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1595,7 +1595,7 @@
           },
           {
             "name": "icu_normalizer_data",
-            "package_key": "icu_normalizer_data-2.2.0",
+            "package_key": "icu_normalizer_data-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1605,7 +1605,7 @@
           },
           {
             "name": "icu_provider",
-            "package_key": "icu_provider-2.2.0",
+            "package_key": "icu_provider-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1625,7 +1625,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1639,16 +1639,26 @@
           "compiled_data"
         ]
       },
-      "icu_normalizer_data-2.2.0": {
+      "icu_normalizer_data-2.3.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "icu_properties-2.2.0": {
+      "icu_properties-2.3.0": {
         "runtime_dependencies": [
           {
+            "name": "displaydoc",
+            "package_key": "displaydoc-0.2.7",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          },
+          {
             "name": "icu_collections",
-            "package_key": "icu_collections-2.2.0",
+            "package_key": "icu_collections-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1658,7 +1668,7 @@
           },
           {
             "name": "icu_locale_core",
-            "package_key": "icu_locale_core-2.2.0",
+            "package_key": "icu_locale_core-2.3.0",
             "kind": "normal",
             "features": [
               "zerovec"
@@ -1670,7 +1680,7 @@
           },
           {
             "name": "icu_properties_data",
-            "package_key": "icu_properties_data-2.2.0",
+            "package_key": "icu_properties_data-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1680,7 +1690,7 @@
           },
           {
             "name": "icu_provider",
-            "package_key": "icu_provider-2.2.0",
+            "package_key": "icu_provider-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1690,7 +1700,7 @@
           },
           {
             "name": "zerotrie",
-            "package_key": "zerotrie-0.2.4",
+            "package_key": "zerotrie-0.2.5",
             "kind": "normal",
             "features": [
               "yoke",
@@ -1703,7 +1713,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [
               "derive",
@@ -1720,12 +1730,12 @@
           "compiled_data"
         ]
       },
-      "icu_properties_data-2.2.0": {
+      "icu_properties_data-2.3.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "icu_provider-2.2.0": {
+      "icu_provider-2.3.0": {
         "runtime_dependencies": [
           {
             "name": "displaydoc",
@@ -1739,7 +1749,7 @@
           },
           {
             "name": "icu_locale_core",
-            "package_key": "icu_locale_core-2.2.0",
+            "package_key": "icu_locale_core-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1749,7 +1759,7 @@
           },
           {
             "name": "writeable",
-            "package_key": "writeable-0.6.3",
+            "package_key": "writeable-0.6.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1783,7 +1793,7 @@
           },
           {
             "name": "zerotrie",
-            "package_key": "zerotrie-0.2.4",
+            "package_key": "zerotrie-0.2.5",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1793,7 +1803,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [
               "derive"
@@ -1856,7 +1866,7 @@
         "runtime_dependencies": [
           {
             "name": "icu_normalizer",
-            "package_key": "icu_normalizer-2.2.0",
+            "package_key": "icu_normalizer-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1866,7 +1876,7 @@
           },
           {
             "name": "icu_properties",
-            "package_key": "icu_properties-2.2.0",
+            "package_key": "icu_properties-2.3.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -1930,7 +1940,7 @@
           "std"
         ]
       },
-      "litemap-0.8.2": {
+      "litemap-0.8.3": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -2043,11 +2053,11 @@
         "build_dependencies": [],
         "features": []
       },
-      "potential_utf-0.1.5": {
+      "potential_utf-0.1.6": {
         "runtime_dependencies": [
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -2173,7 +2183,7 @@
           },
           {
             "name": "proto",
-            "package_key": "quinn-proto-0.11.16",
+            "package_key": "quinn-proto-0.11.17",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -2227,7 +2237,7 @@
           },
           {
             "name": "thiserror",
-            "package_key": "thiserror-2.0.19",
+            "package_key": "thiserror-2.0.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2279,7 +2289,7 @@
           "rustls-ring"
         ]
       },
-      "quinn-proto-0.11.16": {
+      "quinn-proto-0.11.17": {
         "runtime_dependencies": [
           {
             "name": "bytes",
@@ -2377,7 +2387,7 @@
           },
           {
             "name": "thiserror",
-            "package_key": "thiserror-2.0.19",
+            "package_key": "thiserror-2.0.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2577,7 +2587,7 @@
           },
           {
             "name": "cookie_crate",
-            "package_key": "cookie-0.18.1",
+            "package_key": "cookie-0.18.2",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2607,7 +2617,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -2617,7 +2627,7 @@
           },
           {
             "name": "h2",
-            "package_key": "h2-0.4.15",
+            "package_key": "h2-0.4.16",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2647,7 +2657,7 @@
           },
           {
             "name": "http_body_util",
-            "package_key": "http-body-util-0.1.4",
+            "package_key": "http-body-util-0.1.5",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2962,7 +2972,7 @@
           },
           {
             "name": "webpki",
-            "package_key": "rustls-webpki-0.103.13",
+            "package_key": "rustls-webpki-0.103.14",
             "kind": "normal",
             "features": [
               "alloc"
@@ -3022,7 +3032,7 @@
           "web-time"
         ]
       },
-      "rustls-webpki-0.103.13": {
+      "rustls-webpki-0.103.14": {
         "runtime_dependencies": [
           {
             "name": "ring",
@@ -3395,6 +3405,7 @@
           "clone-impls",
           "default",
           "derive",
+          "extra-traits",
           "full",
           "parsing",
           "printing",
@@ -3406,7 +3417,7 @@
         "runtime_dependencies": [
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -3520,11 +3531,11 @@
           "getrandom"
         ]
       },
-      "thiserror-2.0.19": {
+      "thiserror-2.0.20": {
         "runtime_dependencies": [
           {
             "name": "thiserror_impl",
-            "package_key": "thiserror-impl-2.0.19",
+            "package_key": "thiserror-impl-2.0.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3539,7 +3550,7 @@
           "std"
         ]
       },
-      "thiserror-impl-2.0.19": {
+      "thiserror-impl-2.0.20": {
         "runtime_dependencies": [
           {
             "name": "proc_macro2",
@@ -3672,7 +3683,7 @@
           "parsing"
         ]
       },
-      "tinystr-0.8.3": {
+      "tinystr-0.8.4": {
         "runtime_dependencies": [
           {
             "name": "displaydoc",
@@ -3686,7 +3697,7 @@
           },
           {
             "name": "zerovec",
-            "package_key": "zerovec-0.11.6",
+            "package_key": "zerovec-0.11.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -3725,11 +3736,11 @@
         "build_dependencies": [],
         "features": []
       },
-      "todoku-0.1.1": {
+      "todoku-0.1.2": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
-            "package_key": "async-trait-0.1.91",
+            "package_key": "async-trait-0.1.92",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3790,7 +3801,7 @@
           },
           {
             "name": "thiserror",
-            "package_key": "thiserror-2.0.19",
+            "package_key": "thiserror-2.0.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4037,7 +4048,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4047,7 +4058,7 @@
           },
           {
             "name": "futures_sink",
-            "package_key": "futures-sink-0.3.33",
+            "package_key": "futures-sink-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4100,7 +4111,7 @@
         "runtime_dependencies": [
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4110,7 +4121,7 @@
           },
           {
             "name": "futures_util",
-            "package_key": "futures-util-0.3.33",
+            "package_key": "futures-util-0.3.34",
             "kind": "normal",
             "features": [
               "alloc"
@@ -4219,7 +4230,7 @@
           },
           {
             "name": "futures_core",
-            "package_key": "futures-core-0.3.33",
+            "package_key": "futures-core-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -4229,7 +4240,7 @@
           },
           {
             "name": "futures_util",
-            "package_key": "futures-util-0.3.33",
+            "package_key": "futures-util-0.3.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -4259,7 +4270,7 @@
           },
           {
             "name": "http_body_util",
-            "package_key": "http-body-util-0.1.4",
+            "package_key": "http-body-util-0.1.5",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4568,7 +4579,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "writeable-0.6.3": {
+      "writeable-0.6.4": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -4743,7 +4754,7 @@
           "default"
         ]
       },
-      "zerotrie-0.2.4": {
+      "zerotrie-0.2.5": {
         "runtime_dependencies": [
           {
             "name": "displaydoc",
@@ -4784,7 +4795,7 @@
           "zerofrom"
         ]
       },
-      "zerovec-0.11.6": {
+      "zerovec-0.11.7": {
         "runtime_dependencies": [
           {
             "name": "yoke",
@@ -4808,7 +4819,7 @@
           },
           {
             "name": "zerovec_derive",
-            "package_key": "zerovec-derive-0.11.3",
+            "package_key": "zerovec-derive-0.11.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -4823,7 +4834,7 @@
           "yoke"
         ]
       },
-      "zerovec-derive-0.11.3": {
+      "zerovec-derive-0.11.4": {
         "runtime_dependencies": [
           {
             "name": "proc_macro2",
@@ -4847,7 +4858,7 @@
           },
           {
             "name": "syn",
-            "package_key": "syn-2.0.119",
+            "package_key": "syn-3.0.3",
             "kind": "normal",
             "features": [
               "extra-traits"
@@ -4959,7 +4970,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -4969,7 +4980,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -5170,7 +5181,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -5375,7 +5386,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -5385,7 +5396,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -5588,7 +5599,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -5762,7 +5773,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -5772,7 +5783,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -5975,7 +5986,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -6201,7 +6212,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -6211,7 +6222,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -6392,7 +6403,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -6612,7 +6623,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -6622,7 +6633,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -6805,7 +6816,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -6994,7 +7005,7 @@
               },
               {
                 "name": "futures_channel",
-                "package_key": "futures-channel-0.3.33",
+                "package_key": "futures-channel-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": true,
@@ -7004,7 +7015,7 @@
               },
               {
                 "name": "futures_util",
-                "package_key": "futures-util-0.3.33",
+                "package_key": "futures-util-0.3.34",
                 "kind": "normal",
                 "features": [],
                 "uses_default_features": false,
@@ -7187,7 +7198,7 @@
             "build_dependencies": [
               {
                 "name": "cc",
-                "package_key": "cc-1.4.0",
+                "package_key": "cc-1.4.3",
                 "kind": "build",
                 "features": [],
                 "uses_default_features": false,
@@ -7337,7 +7348,7 @@
     "async-compression-0.4.43": {
       "edition": "2018"
     },
-    "async-trait-0.1.91": {
+    "async-trait-0.1.92": {
       "edition": "2021",
       "proc_macro": true
     },
@@ -7375,8 +7386,8 @@
     "bytes-1.12.1": {
       "edition": "2021"
     },
-    "cc-1.4.0": {
-      "edition": "2018"
+    "cc-1.4.3": {
+      "edition": "2021"
     },
     "cfg-if-1.0.4": {
       "edition": "2018"
@@ -7393,7 +7404,7 @@
     "compression-core-0.4.32": {
       "edition": "2018"
     },
-    "cookie-0.18.1": {
+    "cookie-0.18.2": {
       "edition": "2018",
       "build_script": "build.rs"
     },
@@ -7443,8 +7454,8 @@
     "fastrand-2.5.0": {
       "edition": "2018"
     },
-    "find-msvc-tools-0.1.9": {
-      "edition": "2018"
+    "find-msvc-tools-0.1.11": {
+      "edition": "2021"
     },
     "flate2-1.1.9": {
       "edition": "2018"
@@ -7459,19 +7470,19 @@
     "form_urlencoded-1.2.2": {
       "edition": "2018"
     },
-    "futures-channel-0.3.33": {
+    "futures-channel-0.3.34": {
       "edition": "2018"
     },
-    "futures-core-0.3.33": {
+    "futures-core-0.3.34": {
       "edition": "2018"
     },
-    "futures-sink-0.3.33": {
+    "futures-sink-0.3.34": {
       "edition": "2018"
     },
-    "futures-task-0.3.33": {
+    "futures-task-0.3.34": {
       "edition": "2018"
     },
-    "futures-util-0.3.33": {
+    "futures-util-0.3.34": {
       "edition": "2018"
     },
     "getrandom-0.2.17": {
@@ -7481,7 +7492,7 @@
       "edition": "2024",
       "build_script": "build.rs"
     },
-    "h2-0.4.15": {
+    "h2-0.4.16": {
       "edition": "2021"
     },
     "handan-0.1.2": {
@@ -7496,7 +7507,7 @@
     "http-body-1.1.0": {
       "edition": "2018"
     },
-    "http-body-util-0.1.4": {
+    "http-body-util-0.1.5": {
       "edition": "2018"
     },
     "httparse-1.10.1": {
@@ -7512,28 +7523,28 @@
     "hyper-util-0.1.20": {
       "edition": "2021"
     },
-    "icu_collections-2.2.0": {
-      "edition": "2021"
+    "icu_collections-2.3.0": {
+      "edition": "2024"
     },
-    "icu_locale_core-2.2.0": {
-      "edition": "2021"
+    "icu_locale_core-2.3.0": {
+      "edition": "2024"
     },
-    "icu_normalizer-2.2.0": {
-      "edition": "2021"
+    "icu_normalizer-2.3.0": {
+      "edition": "2024"
     },
-    "icu_normalizer_data-2.2.0": {
-      "edition": "2021",
+    "icu_normalizer_data-2.3.0": {
+      "edition": "2024",
       "build_script": "build.rs"
     },
-    "icu_properties-2.2.0": {
-      "edition": "2021"
+    "icu_properties-2.3.0": {
+      "edition": "2024"
     },
-    "icu_properties_data-2.2.0": {
-      "edition": "2021",
+    "icu_properties_data-2.3.0": {
+      "edition": "2024",
       "build_script": "build.rs"
     },
-    "icu_provider-2.2.0": {
-      "edition": "2021"
+    "icu_provider-2.3.0": {
+      "edition": "2024"
     },
     "idna-1.1.0": {
       "edition": "2018"
@@ -7557,7 +7568,7 @@
     "linux-raw-sys-0.12.1": {
       "edition": "2021"
     },
-    "litemap-0.8.2": {
+    "litemap-0.8.3": {
       "edition": "2021"
     },
     "litrs-1.0.0": {
@@ -7593,7 +7604,7 @@
     "pin-project-lite-0.2.17": {
       "edition": "2018"
     },
-    "potential_utf-0.1.5": {
+    "potential_utf-0.1.6": {
       "edition": "2021"
     },
     "powerfmt-0.2.0": {
@@ -7616,7 +7627,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "quinn-proto-0.11.16": {
+    "quinn-proto-0.11.17": {
       "edition": "2021"
     },
     "quinn-udp-0.5.15": {
@@ -7658,7 +7669,7 @@
     "rustls-pki-types-1.15.1": {
       "edition": "2021"
     },
-    "rustls-webpki-0.103.13": {
+    "rustls-webpki-0.103.14": {
       "edition": "2021",
       "lib_target": {
         "name": "webpki",
@@ -7730,11 +7741,11 @@
     "tempfile-3.27.0": {
       "edition": "2021"
     },
-    "thiserror-2.0.19": {
+    "thiserror-2.0.20": {
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "thiserror-impl-2.0.19": {
+    "thiserror-impl-2.0.20": {
       "edition": "2021",
       "proc_macro": true
     },
@@ -7748,7 +7759,7 @@
       "edition": "2024",
       "proc_macro": true
     },
-    "tinystr-0.8.3": {
+    "tinystr-0.8.4": {
       "edition": "2021"
     },
     "tinyvec-1.12.0": {
@@ -7757,7 +7768,7 @@
     "tinyvec_macros-0.1.1": {
       "edition": "2018"
     },
-    "todoku-0.1.1": {
+    "todoku-0.1.2": {
       "edition": "2024",
       "lib_target": {
         "name": "todoku",
@@ -7823,7 +7834,7 @@
     "webpki-roots-1.0.9": {
       "edition": "2021"
     },
-    "writeable-0.6.3": {
+    "writeable-0.6.4": {
       "edition": "2021"
     },
     "yansi-1.0.1": {
@@ -7846,13 +7857,13 @@
     "zeroize-1.9.0": {
       "edition": "2024"
     },
-    "zerotrie-0.2.4": {
+    "zerotrie-0.2.5": {
       "edition": "2021"
     },
-    "zerovec-0.11.6": {
+    "zerovec-0.11.7": {
       "edition": "2021"
     },
-    "zerovec-derive-0.11.3": {
+    "zerovec-derive-0.11.4": {
       "edition": "2021",
       "proc_macro": true
     },
