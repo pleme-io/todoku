@@ -562,6 +562,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "handan"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "168bce822fe8afd3eaffa21b98bcd7df6964382dd84527c89c2218c988be5a67"
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1602,6 +1608,7 @@ version = "0.1.1"
 dependencies = [
  "assert_matches",
  "async-trait",
+ "handan",
  "pretty_assertions",
  "reqwest",
  "serde",

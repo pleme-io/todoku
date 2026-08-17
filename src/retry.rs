@@ -153,20 +153,31 @@ pub enum Idempotency {
 
 /// Parse a `Retry-After` header value into a delay.
 ///
-/// Handles the **delta-seconds** form (RFC 9110 §10.2.3), which is what every
-/// rate-limited JSON API in the fleet's path emits on 429.
+/// Delegates to [`handan::parse_retry_after`], which handles **both** RFC 9110
+/// §10.2.3 forms: **delta-seconds** (`120`) and **HTTP-date**
+/// (`Sun, 06 Nov 1994 08:49:37 GMT`).
 ///
-/// Tier-honest limit: the alternative **HTTP-date** form is deliberately NOT
-/// parsed — doing so needs an RFC 9110 IMF-fixdate parser, and pulling a date
-/// crate here would ripple through `Cargo.gen.lock` for a form no upstream we
-/// call actually sends. An unparseable value returns `None` and the caller
-/// falls back to exponential backoff, which is safe (never shorter than the
-/// server asked for is not guaranteed — state that plainly rather than imply
-/// full compliance).
+/// ── ★ THE LIMIT THIS USED TO CARRY IS GONE ────────────────────────────────
+///
+/// This function previously parsed delta-seconds only, and said so honestly,
+/// giving the reason: *"doing so needs an RFC 9110 IMF-fixdate parser, and
+/// pulling a date crate here would ripple through `Cargo.gen.lock` for a form
+/// no upstream we call actually sends."*
+///
+/// Both halves of that turned out to be wrong. IMF-fixdate is a fixed ASCII
+/// grammar always in GMT, so converting one to a Unix timestamp needs integer
+/// arithmetic and **no date crate at all** — `handan` has zero dependencies.
+/// And upstreams do send it: it is the conventional pairing with `503 Service
+/// Unavailable`. So the cost was real — a `503` or `429` carrying the date form
+/// was read as *no advice given*, discarding the one number the server
+/// volunteered and guessing a backoff instead.
+///
+/// A date already in the past resolves to [`Duration::ZERO`] (retry now) rather
+/// than underflowing. An unparseable value still returns `None`, which callers
+/// must read as *no advice given* — never as "wait zero".
 #[must_use]
 pub fn parse_retry_after(value: &str) -> Option<Duration> {
-    let secs: u64 = value.trim().parse().ok()?;
-    Some(Duration::from_secs(secs))
+    handan::parse_retry_after(value).map(handan::RetryAdvice::delay_now)
 }
 
 /// Error returned by [`retry_with_backoff`] when the operation cannot be
@@ -331,14 +342,35 @@ mod retry_safety_tests {
         assert_eq!(parse_retry_after("0"), Some(Duration::ZERO));
     }
 
-    /// The documented limit, asserted rather than merely written down: the
-    /// HTTP-date form is NOT parsed, and returns None so the caller falls back
-    /// to exponential backoff instead of pretending to comply.
+    /// The HTTP-date form is now parsed, where it used to return `None`. This
+    /// test replaces `retry_after_http_date_form_is_honestly_unparsed`, which
+    /// pinned the old limitation.
+    ///
+    /// Asserted against a date in the PAST on purpose. `parse_retry_after`
+    /// resolves against the system clock, so asserting a *future* date would be
+    /// a time bomb — it would pass today and start failing once that date
+    /// arrives. A past date resolves to `ZERO` for every possible "now", so this
+    /// is stable forever. The arithmetic itself is tested in `handan`, where the
+    /// clock is an injected parameter rather than the system's.
     #[test]
-    fn retry_after_http_date_form_is_honestly_unparsed() {
-        assert_eq!(parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+    fn retry_after_parses_the_http_date_form() {
+        assert_eq!(
+            parse_retry_after("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(Duration::ZERO),
+            "a date in the past means retry now, not no-advice"
+        );
+    }
+
+    /// Genuinely unreadable values still yield no advice, which the caller must
+    /// read as *fall back to backoff* rather than as "wait zero".
+    #[test]
+    fn retry_after_declines_what_it_cannot_read() {
         assert_eq!(parse_retry_after(""), None);
         assert_eq!(parse_retry_after("soon"), None);
+        assert_eq!(parse_retry_after("-5"), None);
+        // Non-GMT zones are not IMF-fixdate; guessing an offset is worse than
+        // declining.
+        assert_eq!(parse_retry_after("Sun, 06 Nov 1994 08:49:37 PST"), None);
     }
 }
 

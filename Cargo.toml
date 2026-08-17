@@ -30,6 +30,9 @@ opt-level = "z"
 strip = true
 
 [dependencies]
+# handan owns what an HTTP status MEANS and what Retry-After says, shared
+# fleet-wide so this is never re-derived. Zero dependencies.
+handan = "0.1"
 async-trait = "0.1"
 # ★ `default-features = false` is load-bearing, not tidiness.
 #

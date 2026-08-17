@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "1891561f5b3e65287b5ff14cf266b602a54f95275b70e3b403a578247acf8933",
+  "cargo_lock_sha256": "e2ee109ca9ce9a8e9965afa107e5cb0256af044df76936169015f168703613f8",
   "manifest_sha256": {
-    "Cargo.toml": "9681fdd5ab3081e966460688276cf23fd57ce4756891a6702d86542f0de7d999"
+    "Cargo.toml": "666d953e0509083dbcb29adeaa449cb8b949f66c1d0953a0e6c71a0d196bcc37"
   },
   "target_resolves": {
     "base": {
@@ -1072,6 +1072,11 @@
             "tree": "target"
           }
         ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "handan-0.1.2": {
+        "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
@@ -3731,6 +3736,16 @@
             "optional": false,
             "target": null,
             "tree": "host"
+          },
+          {
+            "name": "handan",
+            "package_key": "handan-0.1.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
           },
           {
             "name": "reqwest",
@@ -7468,6 +7483,9 @@
     },
     "h2-0.4.15": {
       "edition": "2021"
+    },
+    "handan-0.1.2": {
+      "edition": "2024"
     },
     "hashbrown-0.17.1": {
       "edition": "2024"
