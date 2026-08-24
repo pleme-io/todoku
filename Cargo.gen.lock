@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "67d0548246b88108a6232796a953ee339dd77568811a4298c8e9f90934446609",
+  "cargo_lock_sha256": "0fb96a6aa72f08bb88210e6cccd736484607e8cad2504de9ab90d68ee5ec8afc",
   "manifest_sha256": {
-    "Cargo.toml": "b9cb430943bb188540160090142bf3f7aaeeeda6567c0fb337955c6110151e3f"
+    "Cargo.toml": "3819d80489d7ed4ce2ef954f520d693da4aa56c194057cd23abbe5fc839e2e7a"
   },
   "target_resolves": {
     "base": {
@@ -3736,7 +3736,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "todoku-0.1.2": {
+      "todoku-0.1.3": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -7768,12 +7768,18 @@
     "tinyvec_macros-0.1.1": {
       "edition": "2018"
     },
-    "todoku-0.1.2": {
+    "todoku-0.1.3": {
       "edition": "2024",
       "lib_target": {
         "name": "todoku",
         "path": "src/lib.rs"
-      }
+      },
+      "binaries": [
+        {
+          "name": "gh-owner",
+          "path": "src/bin/gh-owner.rs"
+        }
+      ]
     },
     "tokio-1.53.1": {
       "edition": "2021"
