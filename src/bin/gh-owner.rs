@@ -36,6 +36,26 @@
 //! substitutes a different owner's credential, because a token asserted over a
 //! scope it does not hold is the exact defect the credential table exists to
 //! prevent.
+//!
+//! # Transparency contract
+//!
+//! This binary is also installed AS `gh`, ahead of the real one on PATH, so
+//! every consumer — scripts, MCP servers, muscle memory — gets owner-correct
+//! credentials without knowing this exists. Four properties make that
+//! substitution honest rather than a leaky alias, and each is load-bearing:
+//!
+//! 1. **argv passes through verbatim.** Only the environment is added.
+//! 2. **`exec`, not spawn.** The process is REPLACED, so the tty, signal
+//!    disposition and exit status are those of a direct `gh` call. A spawning
+//!    wrapper would break `gh`'s interactive prompts and swallow signals.
+//! 3. **Unresolved means untouched.** No owner, no table, or an unknown owner
+//!    all run `gh` with nothing injected — byte-identical to invoking it
+//!    directly.
+//! 4. **It can never exec itself.** [`real_gh`] walks PATH but skips any
+//!    candidate that canonicalizes to this same executable. Resolving a bare
+//!    `gh` while installed AS `gh` is an infinite exec loop, and it presents
+//!    as a silently hung terminal rather than as an error — so the guard is
+//!    structural, not a convention.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +63,74 @@ use std::process::Command;
 use todoku::credentials::{
     CredentialTable, Resolution, owner_from_remote_url, owner_from_repo_arg,
 };
+
+/// Absolute path of the REAL `gh`.
+///
+/// This binary is installed under the name `gh`, AHEAD of the real one on
+/// PATH, so `Command::new("gh")` would exec this program again — forever. That
+/// failure presents as a silently hung terminal with no message, so it is
+/// closed structurally rather than by convention.
+///
+/// The resolution walks PATH and **skips any candidate that is this same
+/// executable**, compared by canonicalized path against
+/// [`std::env::current_exe`]. That is self-contained: it needs no build-time
+/// coupling to a `gh` store path, it keeps working if the packaging changes,
+/// and it cannot select itself even if installed under several names or
+/// symlinked from several PATH entries.
+///
+/// `REAL_GH` (compile-time) and `GH_OWNER_REAL_GH` (runtime) override the
+/// search when a caller wants an exact, pinned binary.
+fn real_gh() -> Result<PathBuf, String> {
+    if let Some(p) = option_env!("REAL_GH").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(p));
+    }
+    if let Some(p) = std::env::var_os("GH_OWNER_REAL_GH").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(p));
+    }
+
+    // Our own identity, canonicalized. If this cannot be determined we must
+    // NOT fall back to a bare `gh`: without it there is no way to tell the
+    // real one from ourselves.
+    let me = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|e| {
+            format!("cannot determine own path ({e}), so `gh` cannot be resolved safely")
+        })?;
+
+    let path = std::env::var_os("PATH").ok_or_else(|| "PATH is unset".to_string())?;
+    let mut skipped_self = false;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join("gh");
+        let Ok(canonical) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if canonical == me {
+            skipped_self = true;
+            continue;
+        }
+        if is_executable(&canonical) {
+            return Ok(candidate);
+        }
+    }
+    Err(if skipped_self {
+        "no `gh` on PATH other than this wrapper — the real gh is not installed, or is shadowed \
+         only by us"
+            .to_string()
+    } else {
+        "no `gh` found on PATH".to_string()
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
+}
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -54,7 +142,14 @@ fn main() -> std::process::ExitCode {
     let table = CredentialTable::load_default();
     let owner = determine_owner(&args, table.as_ref().ok());
 
-    let mut cmd = Command::new("gh");
+    let gh = match real_gh() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("gh-owner: {e}");
+            return std::process::ExitCode::from(127);
+        }
+    };
+    let mut cmd = Command::new(&gh);
     cmd.args(&args);
 
     if let Some(owner) = owner.as_deref() {
@@ -87,6 +182,13 @@ fn main() -> std::process::ExitCode {
 /// token. This is the surface to reach for when a call is failing and you need
 /// to know whether the credential or the request is at fault.
 fn explain(rest: &[String]) -> std::process::ExitCode {
+    println!(
+        "gh: {}",
+        real_gh().map_or_else(
+            |e| format!("<unresolved> — {e}"),
+            |p| p.display().to_string()
+        )
+    );
     let table = CredentialTable::load_default();
     match determine_owner(rest, table.as_ref().ok()) {
         None => println!("owner: <undetermined> — gh's own auth applies"),
@@ -334,6 +436,29 @@ mod tests {
             Some("akeylesslabs"),
             "an explicit --repo is authoritative"
         );
+    }
+
+    #[test]
+    fn real_gh_never_resolves_to_this_binary() {
+        // The whole hazard in one assertion: whatever `gh` we pick, it must
+        // not be us. Exec'ing ourselves re-enters this binary and hangs with
+        // no output — the worst possible failure for a transparent shim.
+        let me = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .expect("own path");
+        match real_gh() {
+            Ok(p) => {
+                if let Ok(canonical) = std::fs::canonicalize(&p) {
+                    assert_ne!(canonical, me, "resolved `gh` to ourselves — exec loop");
+                }
+            }
+            // No gh installed in the test environment is a fine outcome; a
+            // silent bare-name fallback would not be.
+            Err(e) => assert!(
+                e.contains("no `gh`") || e.contains("cannot determine own path"),
+                "unexpected error: {e}"
+            ),
+        }
     }
 
     #[test]
