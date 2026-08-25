@@ -14,11 +14,7 @@ pub trait GitHubApi: Send + Sync {
     async fn get_repo_head(&self, owner: &str, repo: &str) -> Result<String, TodokuError>;
 
     /// Get the latest tag for a repo (returns None if no tags).
-    async fn get_latest_tag(
-        &self,
-        owner: &str,
-        repo: &str,
-    ) -> Result<Option<String>, TodokuError>;
+    async fn get_latest_tag(&self, owner: &str, repo: &str) -> Result<Option<String>, TodokuError>;
 
     /// Detect the primary language of a repo.
     async fn get_primary_language(
@@ -210,11 +206,7 @@ impl GitHubApi for GitHubClient {
         Ok(branch_ref.object.sha)
     }
 
-    async fn get_latest_tag(
-        &self,
-        owner: &str,
-        repo: &str,
-    ) -> Result<Option<String>, TodokuError> {
+    async fn get_latest_tag(&self, owner: &str, repo: &str) -> Result<Option<String>, TodokuError> {
         let tags: Vec<TagEntry> = self
             .client
             .get(&format!("/repos/{owner}/{repo}/tags?per_page=1"))
@@ -870,30 +862,21 @@ mod tests {
     async fn failing_mock_get_repo_head() {
         let api = FailingGitHubApi;
         let result = api.get_repo_head("org", "repo").await;
-        assert_matches::assert_matches!(
-            result,
-            Err(TodokuError::Http { status: 404, .. })
-        );
+        assert_matches::assert_matches!(result, Err(TodokuError::Http { status: 404, .. }));
     }
 
     #[tokio::test]
     async fn failing_mock_get_latest_tag() {
         let api = FailingGitHubApi;
         let result = api.get_latest_tag("org", "repo").await;
-        assert_matches::assert_matches!(
-            result,
-            Err(TodokuError::Http { status: 403, .. })
-        );
+        assert_matches::assert_matches!(result, Err(TodokuError::Http { status: 403, .. }));
     }
 
     #[tokio::test]
     async fn failing_mock_get_primary_language() {
         let api = FailingGitHubApi;
         let result = api.get_primary_language("org", "repo").await;
-        assert_matches::assert_matches!(
-            result,
-            Err(TodokuError::Http { status: 500, .. })
-        );
+        assert_matches::assert_matches!(result, Err(TodokuError::Http { status: 500, .. }));
     }
 
     #[tokio::test]
@@ -907,10 +890,7 @@ mod tests {
     async fn failing_mock_get_file_info() {
         let api = FailingGitHubApi;
         let result = api.get_file_info("org", "repo", "README.md").await;
-        assert_matches::assert_matches!(
-            result,
-            Err(TodokuError::Http { status: 404, .. })
-        );
+        assert_matches::assert_matches!(result, Err(TodokuError::Http { status: 404, .. }));
     }
 
     // --- Mock with multiple repos ---
@@ -1182,10 +1162,7 @@ mod tests {
             size: 99999,
             download_url: "https://custom.example.com/big.bin".to_string(),
         };
-        let info = mock
-            .get_file_info("org", "repo", "big.bin")
-            .await
-            .unwrap();
+        let info = mock.get_file_info("org", "repo", "big.bin").await.unwrap();
         assert_eq!(info.size, 99999);
         assert_eq!(info.sha, "custom_sha");
     }

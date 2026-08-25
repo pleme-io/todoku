@@ -136,7 +136,11 @@ impl BlockingHttpClient {
             let headers = resp
                 .headers()
                 .iter()
-                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str().to_owned(), s.to_owned())))
+                .filter_map(|(k, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (k.as_str().to_owned(), s.to_owned()))
+                })
                 .collect();
             let body = resp.bytes().await.map_err(TodokuError::Request)?.to_vec();
             Ok(HttpResponse {
@@ -182,20 +186,20 @@ mod tests {
     fn ssrf_guard_blocks_before_send_synchronously() {
         // The blocking facade reuses the async SSRF guard: a metadata target is
         // rejected before any network I/O, so this is deterministic + offline.
-        let blocking = BlockingHttpClient::from_builder(
-            HttpClient::builder().ssrf_guard(true),
-        )
-        .unwrap();
+        let blocking =
+            BlockingHttpClient::from_builder(HttpClient::builder().ssrf_guard(true)).unwrap();
         let err = blocking
             .get::<serde_json::Value>("http://169.254.169.254/latest/meta-data/")
             .unwrap_err();
-        assert_matches::assert_matches!(err, TodokuError::Ssrf(crate::ssrf::SsrfReason::CloudMetadata));
+        assert_matches::assert_matches!(
+            err,
+            TodokuError::Ssrf(crate::ssrf::SsrfReason::CloudMetadata)
+        );
     }
 
     #[test]
     fn is_debug() {
-        let blocking =
-            BlockingHttpClient::new(HttpClient::builder().build().unwrap()).unwrap();
+        let blocking = BlockingHttpClient::new(HttpClient::builder().build().unwrap()).unwrap();
         assert!(format!("{blocking:?}").contains("BlockingHttpClient"));
     }
 }

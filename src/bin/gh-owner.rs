@@ -208,8 +208,54 @@ fn explain(rest: &[String]) -> std::process::ExitCode {
 /// for why the positional pass is gated on the table.
 fn determine_owner(args: &[String], table: Option<&CredentialTable>) -> Option<String> {
     owner_from_args(args)
+        .or_else(|| owner_from_api_path(args))
         .or_else(|| table.and_then(|t| owner_from_positional(args, t)))
         .or_else(|| owner_from_cwd_remote(Path::new(".")))
+}
+
+/// The owner embedded in a `gh api` REST path.
+///
+/// `gh api` carries its target in a PATH rather than in `--repo`, so without
+/// this the owner falls through to the cwd's git remote. That is not a cosmetic
+/// miss: a call against another org from the wrong directory silently uses the
+/// wrong token, and GitHub answers **404** for a private repo rather than 401,
+/// so it reads as "does not exist" instead of "wrong credential". Measured:
+/// `gh api repos/akeylesslabs/pitr-slack` returned 404 from a pleme-io checkout
+/// and the id from the repo's own directory.
+///
+/// Ordered before the positional lookup because an API path is unambiguous,
+/// while a bare `owner/repo` positional is only trusted when the table already
+/// declares that owner.
+///
+/// Only the two path shapes whose second segment IS an owner are read.
+/// `/user/...`, `/repositories/{id}` and search endpoints carry no owner and
+/// are left alone, so they keep falling through to the cwd as before.
+fn owner_from_api_path(args: &[String]) -> Option<String> {
+    if !args.iter().any(|a| a == "api") {
+        return None;
+    }
+    // Match the PATH SHAPE rather than positionally hunting for the first
+    // non-flag argument. That first attempt read `--method PUT` and took `PUT`
+    // as the path, because a flag's VALUE does not begin with a dash. Skipping
+    // values needs a flag arity table gh does not publish, so the shape is what
+    // is matched: only `repos/…` and `orgs/…` carry an owner in segment two.
+    args.iter().find_map(|arg| {
+        let path = arg
+            .strip_prefix("https://api.github.com/")
+            .unwrap_or(arg)
+            .trim_start_matches('/');
+        let mut seg = path.split('/');
+        let owner = match seg.next()? {
+            "repos" | "orgs" => seg.next()?,
+            _ => return None,
+        };
+        let owner = owner.split(['?', '#']).next().unwrap_or(owner);
+        // A path template such as `repos/{owner}/{repo}` names no real owner.
+        if owner.is_empty() || owner.starts_with('{') || owner.starts_with('$') {
+            return None;
+        }
+        Some(owner.to_string())
+    })
 }
 
 /// A positional `owner/repo` whose owner the table already declares.
@@ -483,5 +529,71 @@ mod tests {
         // Ordering matters: `upstream` appears first and must be skipped.
         let cfg = "[remote \"upstream\"]\n\turl = git@github.com:wrong/repo.git\n";
         assert_eq!(remote_origin_url(cfg), None);
+    }
+
+    #[test]
+    fn api_path_names_the_owner_for_repos_and_orgs() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (args, want) in [
+            (
+                a(&["api", "repos/akeylesslabs/pitr-slack"]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&["api", "/repos/akeylesslabs/pitr-slack"]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&["api", "orgs/akeylesslabs/actions/runner-groups"]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&["api", "--method", "PUT", "repos/pleme-io/actions/x"]),
+                Some("pleme-io"),
+            ),
+            (
+                a(&["api", "repos/akeylesslabs/pitr-slack?foo=1"]),
+                Some("akeylesslabs"),
+            ),
+        ] {
+            assert_eq!(owner_from_api_path(&args).as_deref(), want, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn api_path_declines_when_the_path_names_no_owner() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for args in [
+            a(&["api", "user/packages/container/x"]),
+            a(&["api", "repositories/1345230532"]),
+            a(&["api", "search/code"]),
+            // A template, not a real owner — must not resolve to a token.
+            a(&["api", "repos/{owner}/{repo}"]),
+            // Not an `api` invocation at all.
+            a(&["pr", "view", "436"]),
+            a(&["api"]),
+        ] {
+            assert_eq!(owner_from_api_path(&args), None, "{args:?}");
+        }
+    }
+
+    /// The regression this function exists for: an `api` path must outrank the
+    /// cwd, or a cross-org call silently uses the wrong token and reads as 404.
+    #[test]
+    fn api_path_outranks_the_cwd_but_not_an_explicit_repo_flag() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            determine_owner(&a(&["api", "repos/akeylesslabs/pitr-slack"]), None).as_deref(),
+            Some("akeylesslabs")
+        );
+        assert_eq!(
+            determine_owner(
+                &a(&["api", "repos/akeylesslabs/x", "--repo", "pleme-io/y"]),
+                None
+            )
+            .as_deref(),
+            Some("pleme-io"),
+            "an explicit --repo is the operator's stated intent and still wins"
+        );
     }
 }

@@ -57,8 +57,7 @@ impl BasicAuth {
     }
 
     fn base64_encode(input: &[u8]) -> String {
-        const CHARS: &[u8] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut result = String::with_capacity(input.len().div_ceil(3) * 4);
         for chunk in input.chunks(3) {
             let b0 = u32::from(chunk[0]);
@@ -451,8 +450,11 @@ mod tests {
         let input: Vec<u8> = (0..=255).collect();
         let result = BasicAuth::base64_encode(&input);
         assert!(!result.is_empty());
-        assert!(result.chars().all(|c| c.is_ascii_alphanumeric()
-            || c == '+' || c == '/' || c == '='));
+        assert!(
+            result
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        );
     }
 
     #[test]
@@ -480,7 +482,10 @@ mod tests {
         let auth = HeaderAuth::new(reqwest::header::CONTENT_TYPE, "application/json");
         let mut headers = HeaderMap::new();
         auth.apply(&mut headers);
-        assert_eq!(headers.get(reqwest::header::CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
     }
 
     // --- Multiple auth applications ---
@@ -522,19 +527,23 @@ mod tests {
     fn bearer_then_basic_overwrites_authorization() {
         let mut headers = HeaderMap::new();
         BearerToken::new("tok").apply(&mut headers);
-        assert!(headers
-            .get(reqwest::header::AUTHORIZATION)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with("Bearer "));
+        assert!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("Bearer ")
+        );
         BasicAuth::new("u", "p").apply(&mut headers);
-        assert!(headers
-            .get(reqwest::header::AUTHORIZATION)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with("Basic "));
+        assert!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("Basic ")
+        );
     }
 
     // --- HeaderAuth with various standard header names ---

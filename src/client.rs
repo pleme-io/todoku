@@ -789,10 +789,7 @@ mod tests {
             default_headers: HeaderMap::new(),
             ssrf_guard: false,
         };
-        assert_eq!(
-            client.url("/a/b/c/d"),
-            "https://api.example.com/a/b/c/d"
-        );
+        assert_eq!(client.url("/a/b/c/d"), "https://api.example.com/a/b/c/d");
     }
 
     #[test]
@@ -848,10 +845,7 @@ mod tests {
             ssrf_guard: false,
         };
         // trim_end_matches('/') removes all trailing slashes
-        assert_eq!(
-            client.url("/items"),
-            "https://api.example.com/items"
-        );
+        assert_eq!(client.url("/items"), "https://api.example.com/items");
     }
 
     #[test]
@@ -865,10 +859,7 @@ mod tests {
             ssrf_guard: false,
         };
         // trim_start_matches('/') removes all leading slashes from path
-        assert_eq!(
-            client.url("///items"),
-            "https://api.example.com/items"
-        );
+        assert_eq!(client.url("///items"), "https://api.example.com/items");
     }
 
     // --- Builder defaults ---
@@ -908,20 +899,14 @@ mod tests {
             .base_url("https://api.example.com")
             .build()
             .unwrap();
-        assert_eq!(
-            client.base_url.as_deref(),
-            Some("https://api.example.com")
-        );
+        assert_eq!(client.base_url.as_deref(), Some("https://api.example.com"));
     }
 
     #[test]
     fn builder_sets_base_url_from_string() {
         let url = String::from("https://api.example.com");
         let client = HttpClient::builder().base_url(url).build().unwrap();
-        assert_eq!(
-            client.base_url.as_deref(),
-            Some("https://api.example.com")
-        );
+        assert_eq!(client.base_url.as_deref(), Some("https://api.example.com"));
     }
 
     #[test]
@@ -1063,17 +1048,11 @@ mod tests {
     #[test]
     fn builder_sets_custom_header() {
         let client = HttpClient::builder()
-            .header(
-                reqwest::header::ACCEPT,
-                "application/json",
-            )
+            .header(reqwest::header::ACCEPT, "application/json")
             .build()
             .unwrap();
         assert_eq!(
-            client
-                .default_headers
-                .get(reqwest::header::ACCEPT)
-                .unwrap(),
+            client.default_headers.get(reqwest::header::ACCEPT).unwrap(),
             "application/json"
         );
     }
@@ -1082,18 +1061,12 @@ mod tests {
     fn builder_sets_multiple_headers() {
         let client = HttpClient::builder()
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(
-                HeaderName::from_static("x-request-id"),
-                "abc-123",
-            )
+            .header(HeaderName::from_static("x-request-id"), "abc-123")
             .build()
             .unwrap();
         assert_eq!(client.default_headers.len(), 2);
         assert_eq!(
-            client
-                .default_headers
-                .get(reqwest::header::ACCEPT)
-                .unwrap(),
+            client.default_headers.get(reqwest::header::ACCEPT).unwrap(),
             "application/json"
         );
         assert_eq!(
@@ -1169,10 +1142,7 @@ mod tests {
     #[test]
     fn built_client_no_base_url_resolution() {
         let client = HttpClient::builder().build().unwrap();
-        assert_eq!(
-            client.url("https://other.com/api"),
-            "https://other.com/api"
-        );
+        assert_eq!(client.url("https://other.com/api"), "https://other.com/api");
     }
 
     // --- URL resolution edge cases with builder ---
@@ -1204,10 +1174,7 @@ mod tests {
             cloned.default_headers.get(reqwest::header::ACCEPT).unwrap(),
             "application/json"
         );
-        assert_eq!(
-            cloned.default_headers.get("x-custom").unwrap(),
-            "val"
-        );
+        assert_eq!(cloned.default_headers.get("x-custom").unwrap(), "val");
     }
 
     // --- Clone preserves retry policy fully ---
@@ -1221,10 +1188,7 @@ mod tests {
             multiplier: 1.5,
             retry_statuses: vec![418, 503],
         };
-        let client = HttpClient::builder()
-            .retry(policy)
-            .build()
-            .unwrap();
+        let client = HttpClient::builder().retry(policy).build().unwrap();
         let cloned = client.clone();
         assert_eq!(cloned.retry.max_retries, 7);
         assert_eq!(cloned.retry.initial_backoff, Duration::from_millis(250));
@@ -1238,10 +1202,7 @@ mod tests {
             .base_url("https://localhost:8080/api")
             .build()
             .unwrap();
-        assert_eq!(
-            client.url("/health"),
-            "https://localhost:8080/api/health"
-        );
+        assert_eq!(client.url("/health"), "https://localhost:8080/api/health");
     }
 
     // --- HttpClient is Send + Sync ---
@@ -1433,10 +1394,7 @@ mod tests {
             match HttpClient::builder().tls_profile(profile).build() {
                 Ok(_) => panic!("emulated profile must not build without the stealth feature"),
                 Err(err) => {
-                    assert_matches::assert_matches!(
-                        err,
-                        TodokuError::UnsupportedTlsProfile { .. }
-                    );
+                    assert_matches::assert_matches!(err, TodokuError::UnsupportedTlsProfile { .. });
                     assert!(err.to_string().contains(profile.as_str()));
                 }
             }
@@ -1551,10 +1509,7 @@ mod tests {
             .build()
             .unwrap();
         let res: Result<serde_json::Value> = client.get("/latest/meta-data/").await;
-        assert_matches::assert_matches!(
-            res,
-            Err(TodokuError::Ssrf(SsrfReason::CloudMetadata))
-        );
+        assert_matches::assert_matches!(res, Err(TodokuError::Ssrf(SsrfReason::CloudMetadata)));
     }
 
     #[tokio::test]

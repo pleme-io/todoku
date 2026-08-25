@@ -339,7 +339,10 @@ mod tests {
 
     #[test]
     fn loopback_v4_whole_range() {
-        assert_eq!(classify_ip(ip("127.255.255.254")), Some(SsrfReason::Loopback));
+        assert_eq!(
+            classify_ip(ip("127.255.255.254")),
+            Some(SsrfReason::Loopback)
+        );
     }
 
     #[test]
@@ -422,7 +425,10 @@ mod tests {
 
     #[test]
     fn unique_local_fd_blocked() {
-        assert_eq!(classify_ip(ip("fd12:3456::1")), Some(SsrfReason::UniqueLocal));
+        assert_eq!(
+            classify_ip(ip("fd12:3456::1")),
+            Some(SsrfReason::UniqueLocal)
+        );
     }
 
     // --- multicast ---
@@ -430,7 +436,10 @@ mod tests {
     #[test]
     fn multicast_v4_blocked() {
         assert_eq!(classify_ip(ip("224.0.0.1")), Some(SsrfReason::Multicast));
-        assert_eq!(classify_ip(ip("239.255.255.255")), Some(SsrfReason::Multicast));
+        assert_eq!(
+            classify_ip(ip("239.255.255.255")),
+            Some(SsrfReason::Multicast)
+        );
     }
 
     #[test]
@@ -454,7 +463,10 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_loopback_blocked() {
-        assert_eq!(classify_ip(ip("::ffff:127.0.0.1")), Some(SsrfReason::Loopback));
+        assert_eq!(
+            classify_ip(ip("::ffff:127.0.0.1")),
+            Some(SsrfReason::Loopback)
+        );
     }
 
     #[test]

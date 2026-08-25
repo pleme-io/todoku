@@ -844,8 +844,8 @@ mod tests {
 #[cfg(test)]
 mod retry_with_backoff_tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     fn fast_policy(max_retries: u32) -> RetryPolicy {
         RetryPolicy {
@@ -889,9 +889,12 @@ mod retry_with_backoff_tests {
     #[tokio::test]
     async fn exhausted_returns_last_error() {
         let policy = fast_policy(2);
-        let result: Result<i32, RetryError<&str>> =
-            retry_with_backoff(&policy, || async { Err::<i32, _>("always fails") }, |_| true)
-                .await;
+        let result: Result<i32, RetryError<&str>> = retry_with_backoff(
+            &policy,
+            || async { Err::<i32, _>("always fails") },
+            |_| true,
+        )
+        .await;
         match result {
             Err(RetryError::Exhausted { attempts, last }) => {
                 assert_eq!(attempts, 3);
@@ -957,7 +960,11 @@ mod retry_with_backoff_tests {
                 let attempts = attempts_clone.clone();
                 async move {
                     let n = attempts.fetch_add(1, Ordering::SeqCst);
-                    if n == 0 { Err("transient") } else { Err("fatal") }
+                    if n == 0 {
+                        Err("transient")
+                    } else {
+                        Err("fatal")
+                    }
                 }
             },
             |e| *e == "transient",
