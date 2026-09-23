@@ -41,10 +41,11 @@
 //!
 //! This binary is also installed AS `gh`, ahead of the real one on PATH, so
 //! every consumer — scripts, MCP servers, muscle memory — gets owner-correct
-//! credentials without knowing this exists. Four properties make that
+//! credentials without knowing this exists. Five properties make that
 //! substitution honest rather than a leaky alias, and each is load-bearing:
 //!
-//! 1. **argv passes through verbatim.** Only the environment is added.
+//! 1. **argv passes through verbatim.** Only the environment changes (added for
+//!    ordinary calls, removed for gh's own login commands, property 5).
 //! 2. **`exec`, not spawn.** The process is REPLACED, so the tty, signal
 //!    disposition and exit status are those of a direct `gh` call. A spawning
 //!    wrapper would break `gh`'s interactive prompts and swallow signals.
@@ -56,12 +57,24 @@
 //!    `gh` while installed AS `gh` is an infinite exec loop, and it presents
 //!    as a silently hung terminal rather than as an error — so the guard is
 //!    structural, not a convention.
+//! 5. **gh's own credential commands get gh's own credentials, plus the
+//!    context.** `gh auth login/refresh/logout/switch/setup-git` manage gh's
+//!    stored login, and gh refuses to touch it while `GH_TOKEN` or
+//!    `GITHUB_TOKEN` is set ("The value of the GITHUB_TOKEN environment variable
+//!    is being used"). Measured 2026-09-23: `gh auth refresh` was impossible
+//!    through this wrapper. Those commands now run with both variables
+//!    removed, and a note says which owners the table answers for, because a
+//!    refreshed gh login does not change what a table owner's calls use.
+//!    `gh auth status` prints the routing first. `gh auth token` prints the
+//!    token a call for the resolved owner would use, so
+//!    `GH_TOKEN=$(gh auth token)` in a script gets the right org's credential.
+//!    See [`Route`].
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use todoku::credentials::{
-    CredentialTable, Resolution, owner_from_remote_url, owner_from_repo_arg,
+    CredentialTable, OwnerEntry, Resolution, owner_from_remote_url, owner_from_repo_arg,
 };
 
 /// Absolute path of the REAL `gh`.
@@ -132,6 +145,137 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
+/// What this invocation is, decided before anything runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// An ordinary gh call: inject the owner's credential (the default).
+    Inject,
+    /// `gh auth login/refresh/logout/switch/setup-git`: gh's own credential
+    /// store, which gh refuses to manage while a token variable is set.
+    OwnCredentials,
+    /// `gh auth status`: gh's view, preceded by this wrapper's routing.
+    Status,
+    /// `gh auth token`: the token a call for the resolved owner would use.
+    Token,
+}
+
+/// The `auth` subcommands that manage gh's own stored login.
+const OWN_CREDENTIAL_COMMANDS: [&str; 5] = ["login", "refresh", "logout", "switch", "setup-git"];
+
+fn route(args: &[String]) -> Route {
+    let mut words = args.iter().filter(|a| !a.starts_with('-'));
+    if words.next().map(String::as_str) != Some("auth") {
+        return Route::Inject;
+    }
+    match words.next().map(String::as_str) {
+        Some("status") => Route::Status,
+        Some("token") => Route::Token,
+        Some(sub) if OWN_CREDENTIAL_COMMANDS.contains(&sub) => Route::OwnCredentials,
+        _ => Route::Inject,
+    }
+}
+
+/// True when `--hostname`/`-h` names a host other than github.com, which the
+/// credential table does not cover.
+fn names_another_host(args: &[String]) -> bool {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let host = if a == "--hostname" || a == "-h" {
+            it.next().map(String::as_str)
+        } else {
+            a.strip_prefix("--hostname=")
+        };
+        if let Some(h) = host {
+            return h != "github.com";
+        }
+    }
+    false
+}
+
+/// Whether an owner's token file answers, never the token itself.
+enum TokenState {
+    Present(usize),
+    Missing,
+    Empty,
+    NotInTable,
+}
+
+impl TokenState {
+    fn of(table: &CredentialTable, owner: &str) -> Self {
+        match table.resolve(owner) {
+            Resolution::Found { token, .. } => Self::Present(token.len()),
+            Resolution::Missing { .. } => Self::Missing,
+            Resolution::Empty { .. } => Self::Empty,
+            Resolution::UnknownOwner { .. } => Self::NotInTable,
+        }
+    }
+}
+
+impl std::fmt::Display for TokenState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Present(n) => write!(f, "{n} bytes"),
+            Self::Missing => f.write_str("MISSING"),
+            Self::Empty => f.write_str("EMPTY"),
+            Self::NotInTable => f.write_str("not in table"),
+        }
+    }
+}
+
+/// One owner's routing: where its credential comes from and whether it is there.
+struct RouteRow<'a> {
+    owner: &'a str,
+    entry: &'a OwnerEntry,
+    state: TokenState,
+}
+
+impl std::fmt::Display for RouteRow<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "  {}: sops key {} → {} ({})",
+            self.owner,
+            self.entry.sops_key,
+            self.entry.token_path.display(),
+            self.state
+        )
+    }
+}
+
+fn route_rows(table: &CredentialTable) -> Vec<RouteRow<'_>> {
+    table
+        .owners()
+        .map(|(owner, entry)| RouteRow { owner, entry, state: TokenState::of(table, owner) })
+        .collect()
+}
+
+/// Which owner this invocation resolves to.
+struct ResolvesTo<'a>(Option<&'a str>);
+
+impl std::fmt::Display for ResolvesTo<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(o) => write!(f, "  this invocation resolves to: {o}"),
+            None => f.write_str("  this invocation resolves to no owner: gh's own auth applies"),
+        }
+    }
+}
+
+/// The note printed before gh changes its own login.
+struct OwnLoginNote<'a>(Vec<&'a str>);
+
+impl std::fmt::Display for OwnLoginNote<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "gh-owner: this changes gh's own login. Calls for {} use the credential table \
+             instead, so a permission missing there is granted on that token \
+             (`gh auth status` shows which).",
+            self.0.join(", ")
+        )
+    }
+}
+
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -141,6 +285,19 @@ fn main() -> std::process::ExitCode {
 
     let table = CredentialTable::load_default();
     let owner = determine_owner(&args, table.as_ref().ok());
+    let route = route(&args);
+
+    // `gh auth token` for a table owner: answer with the routed token, which
+    // is what every other call for this owner would use. Anything else falls
+    // through to gh's own answer.
+    if route == Route::Token && !names_another_host(&args) {
+        if let (Some(owner), Ok(table)) = (owner.as_deref(), &table) {
+            if let Resolution::Found { token, .. } = table.resolve(owner) {
+                println!("{}", token.expose());
+                return std::process::ExitCode::SUCCESS;
+            }
+        }
+    }
 
     let gh = match real_gh() {
         Ok(p) => p,
@@ -151,6 +308,31 @@ fn main() -> std::process::ExitCode {
     };
     let mut cmd = Command::new(&gh);
     cmd.args(&args);
+
+    match route {
+        Route::OwnCredentials => {
+            cmd.env_remove("GH_TOKEN");
+            cmd.env_remove("GITHUB_TOKEN");
+            if let Ok(table) = &table {
+                let owners: Vec<&str> = table.owners().map(|(o, _)| o).collect();
+                if !owners.is_empty() {
+                    eprintln!("{}", OwnLoginNote(owners));
+                }
+            }
+            return exec_or_spawn(cmd);
+        }
+        Route::Status => {
+            if let Ok(table) = &table {
+                eprintln!("gh-owner routing (owners in the table use their own credential):");
+                for row in route_rows(table) {
+                    eprintln!("{row}");
+                }
+                eprintln!("{}\n", ResolvesTo(owner.as_deref()));
+            }
+            // Fall through: the rest of gh sees exactly what gh would see.
+        }
+        Route::Inject | Route::Token => {}
+    }
 
     if let Some(owner) = owner.as_deref() {
         match &table {
@@ -195,7 +377,15 @@ fn explain(rest: &[String]) -> std::process::ExitCode {
         Some(owner) => {
             println!("owner: {owner}");
             match &table {
-                Ok(table) => println!("resolution: {}", describe(&table.resolve(&owner))),
+                Ok(table) => {
+                    println!("resolution: {}", describe(&table.resolve(&owner)));
+                    // Where the credential comes from, so a 403 can be traced to
+                    // the token that needs the permission GitHub names in
+                    // `x-accepted-github-permissions` (`gh api -i` shows it).
+                    if let Some(row) = route_rows(table).into_iter().find(|r| r.owner == owner) {
+                        println!("credential: {}", row.to_string().trim_start());
+                    }
+                }
                 Err(e) => println!("resolution: table unavailable — {e}"),
             }
         }
@@ -575,6 +765,56 @@ mod tests {
         ] {
             assert_eq!(owner_from_api_path(&args), None, "{args:?}");
         }
+    }
+
+    #[test]
+    fn gh_own_login_commands_route_to_gh_own_credentials() {
+        // The regression: `gh auth refresh` through this wrapper refused with
+        // "The value of the GITHUB_TOKEN environment variable is being used".
+        for sub in OWN_CREDENTIAL_COMMANDS {
+            assert_eq!(route(&v(&["auth", sub])), Route::OwnCredentials, "{sub}");
+        }
+        assert_eq!(
+            route(&v(&["auth", "refresh", "-h", "github.com", "-s", "admin:org"])),
+            Route::OwnCredentials
+        );
+        assert_eq!(route(&v(&["auth", "status"])), Route::Status);
+        assert_eq!(route(&v(&["auth", "token"])), Route::Token);
+    }
+
+    #[test]
+    fn everything_else_is_an_ordinary_call() {
+        for args in [
+            v(&["pr", "list"]),
+            v(&["api", "repos/pleme-io/nix"]),
+            // `auth` as an argument, not the command, is not gh's auth.
+            v(&["repo", "view", "auth"]),
+            v(&["auth"]),
+            v(&["auth", "--help"]),
+        ] {
+            assert_eq!(route(&args), Route::Inject, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn another_host_is_left_to_gh() {
+        assert!(!names_another_host(&v(&["auth", "token"])));
+        assert!(!names_another_host(&v(&["auth", "token", "-h", "github.com"])));
+        assert!(names_another_host(&v(&["auth", "token", "--hostname", "ghe.example.com"])));
+        assert!(names_another_host(&v(&["auth", "token", "--hostname=ghe.example.com"])));
+    }
+
+    #[test]
+    fn a_route_row_names_the_sops_key_and_path_but_never_the_token() {
+        let t = probe_table();
+        let rows = route_rows(&t);
+        assert_eq!(rows.len(), 1);
+        let text = rows[0].to_string();
+        assert!(text.contains("pleme-io"), "{text}");
+        assert!(text.contains("sops key k"), "{text}");
+        assert!(text.contains("/nope"), "{text}");
+        // The probe table's token file does not exist.
+        assert!(text.contains("MISSING"), "{text}");
     }
 
     /// The regression this function exists for: an `api` path must outrank the
