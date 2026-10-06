@@ -88,6 +88,17 @@ pub struct CredentialTable {
     pub version: u32,
     /// Owners this table knows about, keyed by GitHub owner login.
     pub owners: BTreeMap<String, OwnerEntry>,
+    #[serde(rename = "graphqlOwnerArgs", default = "default_graphql_owner_args")]
+    pub graphql_owner_args: Vec<String>,
+}
+
+pub const DEFAULT_GRAPHQL_OWNER_ARGS: &[&str] = &["owner", "login"];
+
+fn default_graphql_owner_args() -> Vec<String> {
+    DEFAULT_GRAPHQL_OWNER_ARGS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 /// A resolved token. `Debug` is redacted; the value is reachable only via
@@ -439,6 +450,17 @@ mod tests {
             t.owners["akeylesslabs"].sops_key,
             "github/akeylesslabs/token"
         );
+    }
+
+    #[test]
+    fn graphql_owner_args_default_when_absent_and_read_when_present() {
+        let absent = CredentialTable::from_json(r#"{"version":1,"owners":{}}"#).expect("parses");
+        assert_eq!(absent.graphql_owner_args, vec!["owner", "login"]);
+        let present = CredentialTable::from_json(
+            r#"{"version":1,"owners":{},"graphqlOwnerArgs":["owner","login","org"]}"#,
+        )
+        .expect("parses");
+        assert_eq!(present.graphql_owner_args, vec!["owner", "login", "org"]);
     }
 
     #[test]

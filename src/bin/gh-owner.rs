@@ -74,7 +74,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use todoku::credentials::{
-    CredentialTable, OwnerEntry, Resolution, owner_from_remote_url, owner_from_repo_arg,
+    CredentialTable, DEFAULT_GRAPHQL_OWNER_ARGS, OwnerEntry, Resolution, owner_from_remote_url,
+    owner_from_repo_arg,
 };
 
 /// Absolute path of the REAL `gh`.
@@ -245,7 +246,11 @@ impl std::fmt::Display for RouteRow<'_> {
 fn route_rows(table: &CredentialTable) -> Vec<RouteRow<'_>> {
     table
         .owners()
-        .map(|(owner, entry)| RouteRow { owner, entry, state: TokenState::of(table, owner) })
+        .map(|(owner, entry)| RouteRow {
+            owner,
+            entry,
+            state: TokenState::of(table, owner),
+        })
         .collect()
 }
 
@@ -393,12 +398,25 @@ fn explain(rest: &[String]) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
+fn graphql_owner_args(table: Option<&CredentialTable>) -> Vec<String> {
+    table.map_or_else(
+        || {
+            DEFAULT_GRAPHQL_OWNER_ARGS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        },
+        |t| t.graphql_owner_args.clone(),
+    )
+}
+
 /// The owner this invocation is about: an explicit flag, else a
 /// table-confirmed positional, else the cwd's `origin`. See the module docs
 /// for why the positional pass is gated on the table.
 fn determine_owner(args: &[String], table: Option<&CredentialTable>) -> Option<String> {
     owner_from_args(args)
         .or_else(|| owner_from_api_path(args))
+        .or_else(|| owner_from_graphql(args, &graphql_owner_args(table)))
         .or_else(|| table.and_then(|t| owner_from_positional(args, t)))
         .or_else(|| owner_from_cwd_remote(Path::new(".")))
 }
@@ -445,6 +463,59 @@ fn owner_from_api_path(args: &[String]) -> Option<String> {
             return None;
         }
         Some(owner.to_string())
+    })
+}
+
+fn owner_from_graphql(args: &[String], keys: &[String]) -> Option<String> {
+    if !args.iter().any(|a| a == "api")
+        || !args.iter().any(|a| a.trim_start_matches('/') == "graphql")
+    {
+        return None;
+    }
+    let mut fields = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if matches!(a.as_str(), "-f" | "-F" | "--field" | "--raw-field") {
+            if let Some(v) = it.next() {
+                fields.push(v.as_str());
+            }
+        } else if let Some(v) = a
+            .strip_prefix("--field=")
+            .or_else(|| a.strip_prefix("--raw-field="))
+        {
+            fields.push(v);
+        }
+    }
+    let valid = |o: &str| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let from_field = keys.iter().find_map(|k| {
+        fields
+            .iter()
+            .find_map(|f| f.strip_prefix(k.as_str())?.strip_prefix('='))
+            .filter(|o| valid(o))
+    });
+    if let Some(o) = from_field {
+        return Some(o.to_string());
+    }
+    let query = fields.iter().find_map(|f| f.strip_prefix("query="))?;
+    keys.iter().find_map(|k| {
+        literal_argument(query, k)
+            .filter(|o| valid(o))
+            .map(str::to_string)
+    })
+}
+
+fn literal_argument<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.match_indices(key).find_map(|(i, _)| {
+        let before = query[..i].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let rest = query[i + key.len()..]
+            .trim_start()
+            .strip_prefix(':')?
+            .trim_start()
+            .strip_prefix('"')?;
+        Some(&rest[..rest.find('"')?])
     })
 }
 
@@ -751,6 +822,126 @@ mod tests {
     }
 
     #[test]
+    fn graphql_names_the_owner_from_a_field_or_the_query() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (args, want) in [
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "-F",
+                    "owner=akeylesslabs",
+                    "-f",
+                    "query=query($owner:String!){x}",
+                ]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "--field=owner=pleme-io",
+                    "-f",
+                    "query={x}",
+                ]),
+                Some("pleme-io"),
+            ),
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "-f",
+                    r#"query=query{repository(owner:"akeylesslabs",name:"akeyless-environments"){id}}"#,
+                ]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "-f",
+                    r#"query={ repository(owner: "akeylesslabs", name: "x") { id } }"#,
+                ]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "-f",
+                    r#"query={ organization(login: "akeylesslabs") { id } }"#,
+                ]),
+                Some("akeylesslabs"),
+            ),
+            (
+                a(&[
+                    "api",
+                    "graphql",
+                    "-f",
+                    r#"query={ repositoryOwner(login: "pleme-io") { id } }"#,
+                ]),
+                Some("pleme-io"),
+            ),
+        ] {
+            assert_eq!(
+                owner_from_graphql(&args, &graphql_owner_args(None)).as_deref(),
+                want,
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn graphql_owner_args_come_from_the_table() {
+        let t =
+            CredentialTable::from_json(r#"{"version":1,"owners":{},"graphqlOwnerArgs":["org"]}"#)
+                .unwrap();
+        let args = v(&[
+            "api",
+            "graphql",
+            "-f",
+            r#"query={ x(org: "akeylesslabs") { id } }"#,
+        ]);
+        assert_eq!(
+            owner_from_graphql(&args, &graphql_owner_args(Some(&t))).as_deref(),
+            Some("akeylesslabs")
+        );
+        let args = v(&[
+            "api",
+            "graphql",
+            "-f",
+            r#"query={ repository(owner: "akeylesslabs") { id } }"#,
+        ]);
+        assert_eq!(
+            owner_from_graphql(&args, &graphql_owner_args(Some(&t))),
+            None
+        );
+    }
+
+    #[test]
+    fn graphql_declines_without_a_literal_owner() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for args in [
+            a(&["api", "graphql", "-f", "query=query{viewer{login}}"]),
+            a(&[
+                "api",
+                "graphql",
+                "-f",
+                "query=query($owner:String!){repository(owner:$owner,name:\"x\"){id}}",
+            ]),
+            a(&["api", "graphql", "-F", "owner=$OWNER", "-f", "query={x}"]),
+            a(&["api", "repos/akeylesslabs/x", "-f", "owner=pleme-io"]),
+            a(&["pr", "view", "1", "-f", "owner=pleme-io"]),
+        ] {
+            assert_eq!(
+                owner_from_graphql(&args, &graphql_owner_args(None)),
+                None,
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn api_path_declines_when_the_path_names_no_owner() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         for args in [
@@ -775,7 +966,14 @@ mod tests {
             assert_eq!(route(&v(&["auth", sub])), Route::OwnCredentials, "{sub}");
         }
         assert_eq!(
-            route(&v(&["auth", "refresh", "-h", "github.com", "-s", "admin:org"])),
+            route(&v(&[
+                "auth",
+                "refresh",
+                "-h",
+                "github.com",
+                "-s",
+                "admin:org"
+            ])),
             Route::OwnCredentials
         );
         assert_eq!(route(&v(&["auth", "status"])), Route::Status);
@@ -799,9 +997,23 @@ mod tests {
     #[test]
     fn another_host_is_left_to_gh() {
         assert!(!names_another_host(&v(&["auth", "token"])));
-        assert!(!names_another_host(&v(&["auth", "token", "-h", "github.com"])));
-        assert!(names_another_host(&v(&["auth", "token", "--hostname", "ghe.example.com"])));
-        assert!(names_another_host(&v(&["auth", "token", "--hostname=ghe.example.com"])));
+        assert!(!names_another_host(&v(&[
+            "auth",
+            "token",
+            "-h",
+            "github.com"
+        ])));
+        assert!(names_another_host(&v(&[
+            "auth",
+            "token",
+            "--hostname",
+            "ghe.example.com"
+        ])));
+        assert!(names_another_host(&v(&[
+            "auth",
+            "token",
+            "--hostname=ghe.example.com"
+        ])));
     }
 
     #[test]
