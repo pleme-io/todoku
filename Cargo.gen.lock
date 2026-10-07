@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "81af931148d000b6ce177e8f7f2632bb4fb3b8f589315c69c4e39eafc93e0535",
+  "cargo_lock_sha256": "79953ea25039e382f8af53a5890ae52016e010188a396565e63618acbffad4c1",
   "manifest_sha256": {
-    "Cargo.toml": "9b9a5dbe479106bd3bf082ba11c5550ab7484c9c05bbf7d0753d76c35e6db58f"
+    "Cargo.toml": "3cc7f39afd54fef31c8a0424155ae79e8bd9b084e79d5acb33b423389e14789f"
   },
   "target_resolves": {
     "base": {
@@ -3736,7 +3736,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "todoku-0.1.7": {
+      "todoku-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -7768,7 +7768,7 @@
     "tinyvec_macros-0.1.1": {
       "edition": "2018"
     },
-    "todoku-0.1.7": {
+    "todoku-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "todoku",
