@@ -52,11 +52,17 @@
 //! 3. **Unresolved means untouched.** No owner, no table, or an unknown owner
 //!    all run `gh` with nothing injected — byte-identical to invoking it
 //!    directly.
-//! 4. **It can never exec itself.** [`real_gh`] walks PATH but skips any
-//!    candidate that canonicalizes to this same executable. Resolving a bare
-//!    `gh` while installed AS `gh` is an infinite exec loop, and it presents
-//!    as a silently hung terminal rather than as an error — so the guard is
-//!    structural, not a convention.
+//! 4. **It can never exec itself, or another copy of itself.** [`real_gh`]
+//!    walks PATH and skips every candidate that resolves to this wrapper —
+//!    this exact executable, and any other build of it, which canonicalizes to
+//!    a file named [`SELF_BASENAME`]. Resolving a bare `gh` while installed AS
+//!    `gh` is an infinite exec loop, and it presents as a silently hung
+//!    terminal rather than as an error — so the guard is structural, not a
+//!    convention. Measured 2026-10-07 on a darwin node: two profiles on PATH
+//!    carried different versions of this wrapper as `gh`, each one newer than
+//!    the other's `current_exe`, and they exec'd each other 4,081 times in 30s
+//!    with no output. Identity alone does not close the loop; the name does.
+//!    [`GH_OWNER_DEPTH`] then bounds any cycle a future packaging invents.
 //! 5. **gh's own credential commands get gh's own credentials, plus the
 //!    context.** `gh auth login/refresh/logout/switch/setup-git` manage gh's
 //!    stored login, and gh refuses to touch it while `GH_TOKEN` or
@@ -85,12 +91,15 @@ use todoku::credentials::{
 /// failure presents as a silently hung terminal with no message, so it is
 /// closed structurally rather than by convention.
 ///
-/// The resolution walks PATH and **skips any candidate that is this same
-/// executable**, compared by canonicalized path against
-/// [`std::env::current_exe`]. That is self-contained: it needs no build-time
-/// coupling to a `gh` store path, it keeps working if the packaging changes,
-/// and it cannot select itself even if installed under several names or
-/// symlinked from several PATH entries.
+/// The resolution walks PATH and **skips any candidate that is this wrapper**,
+/// by canonicalized path against [`std::env::current_exe`] and by canonical
+/// file name against [`SELF_BASENAME`]. The second test is what makes it a
+/// guard rather than a coincidence: a DIFFERENT build of this wrapper is not
+/// `current_exe`, so identity alone accepts it and the two exec each other
+/// forever. Both tests are self-contained: they need no build-time coupling to
+/// a `gh` store path, they keep working if the packaging changes, and they
+/// cannot select this wrapper even when it is installed under several names,
+/// in several profiles, at several versions.
 ///
 /// `REAL_GH` (compile-time) and `GH_OWNER_REAL_GH` (runtime) override the
 /// search when a caller wants an exact, pinned binary.
@@ -112,27 +121,68 @@ fn real_gh() -> Result<PathBuf, String> {
         })?;
 
     let path = std::env::var_os("PATH").ok_or_else(|| "PATH is unset".to_string())?;
-    let mut skipped_self = false;
-    for dir in std::env::split_paths(&path) {
+    real_gh_on(&path, &me)
+}
+
+/// The file name every build of this wrapper canonicalizes to.
+///
+/// The packaging installs it as `gh` through a symlink to `bin/gh-owner`, so
+/// this name identifies a copy of the wrapper across versions and profiles,
+/// which [`std::env::current_exe`] cannot.
+pub const SELF_BASENAME: &str = "gh-owner";
+
+/// How many wrapper hops are allowed before a resolution is called a cycle.
+///
+/// A nested `gh` call from a gh extension is one or two hops. An exec loop
+/// passes this within milliseconds, which is the point: it fails loudly
+/// instead of hanging.
+pub const GH_OWNER_DEPTH: &str = "GH_OWNER_DEPTH";
+const MAX_DEPTH: u32 = 8;
+
+/// Whether a resolved candidate is this wrapper: this exact executable, or any
+/// other build of it.
+fn is_this_wrapper(canonical: &Path, me: &Path) -> bool {
+    canonical == me || canonical.file_name() == Some(std::ffi::OsStr::new(SELF_BASENAME))
+}
+
+/// [`real_gh`] over a given PATH and own identity, so the guard is testable
+/// without the process environment.
+fn real_gh_on(path: &std::ffi::OsStr, me: &Path) -> Result<PathBuf, String> {
+    let mut skipped_wrapper = false;
+    for dir in std::env::split_paths(path) {
         let candidate = dir.join("gh");
         let Ok(canonical) = std::fs::canonicalize(&candidate) else {
             continue;
         };
-        if canonical == me {
-            skipped_self = true;
+        if is_this_wrapper(&canonical, me) {
+            skipped_wrapper = true;
             continue;
         }
         if is_executable(&canonical) {
             return Ok(candidate);
         }
     }
-    Err(if skipped_self {
-        "no `gh` on PATH other than this wrapper — the real gh is not installed, or is shadowed \
-         only by us"
-            .to_string()
+    Err(if skipped_wrapper {
+        format!(
+            "no `gh` on PATH other than this wrapper — the real gh is not installed, or every \
+             `gh` on PATH resolves to a `{SELF_BASENAME}`"
+        )
     } else {
         "no `gh` found on PATH".to_string()
     })
+}
+
+/// The hop this invocation is, and the one to pass on.
+///
+/// `Err` is a cycle: something keeps handing this wrapper back to itself, so
+/// the call is refused with what it resolved rather than run.
+fn depth_or_cycle(raw: Option<&str>) -> Result<u32, u32> {
+    let depth = raw.and_then(|d| d.parse().ok()).unwrap_or(0);
+    if depth >= MAX_DEPTH {
+        Err(depth)
+    } else {
+        Ok(depth)
+    }
 }
 
 #[cfg(unix)]
@@ -311,7 +361,21 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(127);
         }
     };
+    let depth = match depth_or_cycle(std::env::var(GH_OWNER_DEPTH).ok().as_deref()) {
+        Ok(d) => d,
+        Err(d) => {
+            eprintln!(
+                "gh-owner: refusing to run `{}` — {GH_OWNER_DEPTH}={d} says this wrapper has \
+                 already handed the call to itself {d} times. Something on PATH resolves `gh` \
+                 back to a copy of this wrapper; run `gh-owner --gh-owner-explain <same args>` \
+                 to see which.",
+                gh.display()
+            );
+            return std::process::ExitCode::from(127);
+        }
+    };
     let mut cmd = Command::new(&gh);
+    cmd.env(GH_OWNER_DEPTH, (depth + 1).to_string());
     cmd.args(&args);
 
     match route {
@@ -743,6 +807,71 @@ mod tests {
             Some("akeylesslabs"),
             "an explicit --repo is authoritative"
         );
+    }
+
+    /// A PATH entry holding `gh` → a file of the given name, both executable.
+    fn profile(root: &Path, dir: &str, resolves_to: &str) -> PathBuf {
+        let d = root.join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        let target = d.join(resolves_to);
+        std::fs::write(&target, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        if resolves_to != "gh" {
+            std::os::unix::fs::symlink(&target, d.join("gh")).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn another_build_of_this_wrapper_is_skipped_for_the_real_gh() {
+        // The measured failure: two profiles carry this wrapper as `gh` at
+        // different versions, so neither is the other's `current_exe` and they
+        // exec each other forever. The canonical NAME closes it.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let stale = profile(root, "stale", SELF_BASENAME);
+        let live = profile(root, "live", SELF_BASENAME);
+        let system = profile(root, "system", "gh");
+        let me = std::fs::canonicalize(live.join(SELF_BASENAME)).unwrap();
+
+        let path = std::env::join_paths([&stale, &live, &system]).unwrap();
+        let picked = real_gh_on(&path, &me).expect("the real gh is on PATH");
+        assert_eq!(
+            std::fs::canonicalize(&picked).unwrap(),
+            std::fs::canonicalize(system.join("gh")).unwrap()
+        );
+    }
+
+    #[test]
+    fn only_wrappers_on_path_is_an_error_naming_them_not_a_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let stale = profile(root, "stale", SELF_BASENAME);
+        let live = profile(root, "live", SELF_BASENAME);
+        let me = std::fs::canonicalize(live.join(SELF_BASENAME)).unwrap();
+
+        let path = std::env::join_paths([&stale, &live]).unwrap();
+        let e = real_gh_on(&path, &me).expect_err("no real gh to find");
+        assert!(e.contains(SELF_BASENAME), "{e}");
+    }
+
+    #[test]
+    fn a_cycle_is_refused_at_the_bound_and_a_nested_call_is_not() {
+        assert_eq!(depth_or_cycle(None), Ok(0), "a direct call is hop 0");
+        assert_eq!(
+            depth_or_cycle(Some("2")),
+            Ok(2),
+            "a gh extension nesting gh is fine"
+        );
+        assert_eq!(depth_or_cycle(Some(&MAX_DEPTH.to_string())), Err(MAX_DEPTH));
+        assert_eq!(depth_or_cycle(Some("99")), Err(99));
+        // Garbage is hop 0, never a refusal: the variable is a counter we set,
+        // and a stray value in the environment must not break a real call.
+        assert_eq!(depth_or_cycle(Some("not-a-number")), Ok(0));
     }
 
     #[test]
