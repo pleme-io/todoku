@@ -22,6 +22,9 @@ pub use credentials::{
 };
 pub use error::TodokuError;
 pub use github::{FileInfo, GitHubApi, GitHubClient, GitHubRepo, OwnerType};
-pub use retry::{Idempotency, RetryError, RetryPolicy, parse_retry_after, retry_with_backoff};
+pub use retry::{
+    Idempotency, Jitter, RetryError, RetryPolicy, RetryVerdict, entropy, parse_retry_after,
+    retry_with_backoff, retry_with_verdict,
+};
 pub use ssrf::{SsrfReason, check_url, classify_ip};
 pub use tls::TlsProfile;

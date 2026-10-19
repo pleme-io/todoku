@@ -249,7 +249,7 @@ impl<E> RetryError<E> {
 /// ```
 pub async fn retry_with_backoff<F, Fut, T, E, P>(
     policy: &RetryPolicy,
-    mut operation: F,
+    operation: F,
     mut should_retry: P,
 ) -> Result<T, RetryError<E>>
 where
@@ -257,13 +257,96 @@ where
     Fut: Future<Output = Result<T, E>>,
     P: FnMut(&E) -> bool,
 {
+    retry_with_verdict(
+        policy,
+        Jitter::None,
+        operation,
+        |err| {
+            if should_retry(err) {
+                RetryVerdict::Backoff
+            } else {
+                RetryVerdict::Stop
+            }
+        },
+        tokio::time::sleep,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Jitter {
+    #[default]
+    None,
+    Full,
+    Equal,
+}
+
+impl Jitter {
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn apply(self, delay: Duration, entropy: u64) -> Duration {
+        let scale = |d: Duration| {
+            let nanos = d.as_nanos().saturating_mul(u128::from(entropy)) / u128::from(u64::MAX);
+            Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+        };
+        match self {
+            Self::None => delay,
+            Self::Full => scale(delay),
+            Self::Equal => {
+                let half = delay / 2;
+                half + scale(delay.saturating_sub(half))
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn entropy() -> u64 {
+    use std::hash::BuildHasher;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    std::collections::hash_map::RandomState::new().hash_one(nanos)
+}
+
+impl RetryPolicy {
+    #[must_use]
+    pub fn jittered_backoff_for(&self, attempt: u32, jitter: Jitter) -> Duration {
+        jitter.apply(self.backoff_for(attempt), entropy())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryVerdict {
+    Stop,
+    Backoff,
+    After(Duration),
+}
+
+#[allow(clippy::missing_errors_doc)]
+pub async fn retry_with_verdict<F, Fut, T, E, C, S, SFut>(
+    policy: &RetryPolicy,
+    jitter: Jitter,
+    mut operation: F,
+    mut classify: C,
+    mut sleep: S,
+) -> Result<T, RetryError<E>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    C: FnMut(&E) -> RetryVerdict,
+    S: FnMut(Duration) -> SFut,
+    SFut: Future<Output = ()>,
+{
     let mut attempt: u32 = 0;
     loop {
         attempt = attempt.saturating_add(1);
         match operation().await {
             Ok(value) => return Ok(value),
             Err(err) => {
-                if !should_retry(&err) {
+                let verdict = classify(&err);
+                if verdict == RetryVerdict::Stop {
                     return Err(RetryError::NonRetryable(err));
                 }
                 if attempt > policy.max_retries {
@@ -272,15 +355,185 @@ where
                         last: err,
                     });
                 }
-                let backoff = policy.backoff_for(attempt - 1);
+                let delay = match verdict {
+                    RetryVerdict::After(advised) => advised,
+                    _ => policy.jittered_backoff_for(attempt - 1, jitter),
+                };
                 tracing::warn!(
                     attempt,
                     max = policy.max_retries,
-                    backoff_ms = backoff.as_millis() as u64,
+                    delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    advised = matches!(verdict, RetryVerdict::After(_)),
                     "operation failed, retrying"
                 );
-                tokio::time::sleep(backoff).await;
+                sleep(delay).await;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod retry_with_verdict_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_retries,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(1),
+            multiplier: 2.0,
+            retry_statuses: vec![],
+        }
+    }
+
+    fn recorder() -> (
+        Arc<Mutex<Vec<Duration>>>,
+        impl FnMut(Duration) -> std::future::Ready<()>,
+    ) {
+        let slept = Arc::new(Mutex::new(Vec::new()));
+        let sink = slept.clone();
+        (slept, move |d| {
+            sink.lock().unwrap().push(d);
+            std::future::ready(())
+        })
+    }
+
+    #[test]
+    fn no_jitter_is_the_identity() {
+        let d = Duration::from_millis(800);
+        assert_eq!(Jitter::None.apply(d, 0), d);
+        assert_eq!(Jitter::None.apply(d, u64::MAX), d);
+    }
+
+    #[test]
+    fn full_jitter_spans_zero_to_the_delay() {
+        let d = Duration::from_millis(800);
+        assert_eq!(Jitter::Full.apply(d, 0), Duration::ZERO);
+        assert_eq!(Jitter::Full.apply(d, u64::MAX), d);
+        assert_eq!(
+            Jitter::Full.apply(d, u64::MAX / 2),
+            Duration::from_nanos(399_999_999)
+        );
+    }
+
+    #[test]
+    fn equal_jitter_keeps_at_least_half() {
+        let d = Duration::from_millis(800);
+        assert_eq!(Jitter::Equal.apply(d, 0), Duration::from_millis(400));
+        assert_eq!(Jitter::Equal.apply(d, u64::MAX), d);
+    }
+
+    #[test]
+    fn jittered_backoff_never_exceeds_the_policy() {
+        let p = policy(5);
+        for attempt in 0..8 {
+            for _ in 0..64 {
+                let base = p.backoff_for(attempt);
+                let full = p.jittered_backoff_for(attempt, Jitter::Full);
+                let equal = p.jittered_backoff_for(attempt, Jitter::Equal);
+                assert!(full <= base);
+                assert!(equal <= base && equal >= base / 2);
+            }
+        }
+    }
+
+    #[test]
+    fn entropy_varies() {
+        let draws: std::collections::BTreeSet<u64> = (0..16).map(|_| entropy()).collect();
+        assert!(draws.len() > 1);
+    }
+
+    #[test]
+    fn jitter_serde_is_snake_case_and_defaults_to_none() {
+        assert_eq!(serde_json::to_string(&Jitter::Full).unwrap(), "\"full\"");
+        assert_eq!(
+            serde_json::from_str::<Jitter>("\"equal\"").unwrap(),
+            Jitter::Equal
+        );
+        assert_eq!(Jitter::default(), Jitter::None);
+    }
+
+    #[tokio::test]
+    async fn advised_delays_are_slept_exactly_and_backoff_follows_the_policy() {
+        let (slept, sleep) = recorder();
+        let mut n = 0u32;
+        let result: Result<u32, RetryError<&str>> = retry_with_verdict(
+            &policy(5),
+            Jitter::None,
+            || {
+                n += 1;
+                let k = n;
+                async move { if k < 4 { Err("again") } else { Ok(k) } }
+            },
+            {
+                let mut seen = 0u32;
+                move |_e: &&str| {
+                    seen += 1;
+                    if seen == 2 {
+                        RetryVerdict::After(Duration::from_secs(7))
+                    } else {
+                        RetryVerdict::Backoff
+                    }
+                }
+            },
+            sleep,
+        )
+        .await;
+        assert_eq!(result.unwrap(), 4);
+        assert_eq!(
+            *slept.lock().unwrap(),
+            vec![
+                Duration::from_millis(100),
+                Duration::from_secs(7),
+                Duration::from_millis(400),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_short_circuits_without_sleeping() {
+        let (slept, sleep) = recorder();
+        let mut calls = 0u32;
+        let result: Result<(), RetryError<&str>> = retry_with_verdict(
+            &policy(5),
+            Jitter::Full,
+            || {
+                calls += 1;
+                async { Err("fatal") }
+            },
+            |_| RetryVerdict::Stop,
+            sleep,
+        )
+        .await;
+        assert_eq!(result, Err(RetryError::NonRetryable("fatal")));
+        assert_eq!(calls, 1);
+        assert!(slept.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exhaustion_counts_every_attempt() {
+        let (slept, sleep) = recorder();
+        let result: Result<(), RetryError<&str>> = retry_with_verdict(
+            &policy(3),
+            Jitter::Equal,
+            || async { Err("down") },
+            |_| RetryVerdict::Backoff,
+            sleep,
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(RetryError::Exhausted {
+                attempts: 4,
+                last: "down"
+            })
+        );
+        let slept = slept.lock().unwrap();
+        assert_eq!(slept.len(), 3);
+        for (i, d) in slept.iter().enumerate() {
+            let base = policy(3).backoff_for(u32::try_from(i).unwrap());
+            assert!(*d <= base && *d >= base / 2);
         }
     }
 }
