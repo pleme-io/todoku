@@ -342,10 +342,15 @@ fn main() -> std::process::ExitCode {
     let owner = determine_owner(&args, table.as_ref().ok());
     let route = route(&args);
 
+    let foreign = caller_brought_a_foreign_token(
+        std::env::var("GH_TOKEN").ok().as_deref(),
+        table.as_ref().ok(),
+    );
+
     // `gh auth token` for a table owner: answer with the routed token, which
     // is what every other call for this owner would use. Anything else falls
     // through to gh's own answer.
-    if route == Route::Token && !names_another_host(&args) {
+    if route == Route::Token && !foreign && !names_another_host(&args) {
         if let (Some(owner), Ok(table)) = (owner.as_deref(), &table) {
             if let Resolution::Found { token, .. } = table.resolve(owner) {
                 println!("{}", token.expose());
@@ -403,7 +408,7 @@ fn main() -> std::process::ExitCode {
         Route::Inject | Route::Token => {}
     }
 
-    if let Some(owner) = owner.as_deref() {
+    if let Some(owner) = owner.as_deref().filter(|_| !foreign) {
         match &table {
             Ok(table) => match table.resolve(owner) {
                 Resolution::Found { token, .. } => {
@@ -427,6 +432,13 @@ fn main() -> std::process::ExitCode {
     }
 
     exec_or_spawn(cmd)
+}
+
+fn caller_brought_a_foreign_token(gh_token: Option<&str>, table: Option<&CredentialTable>) -> bool {
+    let Some(value) = gh_token.map(str::trim).filter(|v| !v.is_empty()) else {
+        return false;
+    };
+    !table.is_some_and(|t| t.issued(value))
 }
 
 /// Report what WOULD happen, without running `gh` and without printing a
@@ -764,6 +776,25 @@ mod tests {
             owner_from_args(&v(&["pr", "list", "--repo", "pleme-io"])),
             None
         );
+    }
+
+    #[test]
+    fn a_token_the_table_never_issued_is_the_callers_and_passes_through() {
+        let dir = std::env::temp_dir().join(format!("gh-owner-foreign-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "github_pat_ambient\n").unwrap();
+        let t = CredentialTable::from_json(&format!(
+            r#"{{"version":1,"owners":{{"pleme-io":{{"tokenPath":"{}","sopsKey":"k"}}}}}}"#,
+            path.display()
+        ))
+        .unwrap();
+        assert!(caller_brought_a_foreign_token(Some("ghs_app_minted"), Some(&t)));
+        assert!(!caller_brought_a_foreign_token(Some("github_pat_ambient"), Some(&t)));
+        assert!(!caller_brought_a_foreign_token(Some("  "), Some(&t)));
+        assert!(!caller_brought_a_foreign_token(None, Some(&t)));
+        assert!(caller_brought_a_foreign_token(Some("ghs_app_minted"), None));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn probe_table() -> CredentialTable {

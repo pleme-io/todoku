@@ -358,6 +358,14 @@ impl CredentialTable {
         }
     }
 
+    #[must_use]
+    pub fn issued(&self, value: &str) -> bool {
+        let value = value.trim();
+        self.owners
+            .keys()
+            .any(|o| self.resolve(o).token().is_some_and(|t| t.expose() == value))
+    }
+
     /// The owners this table declares.
     pub fn owners(&self) -> impl Iterator<Item = (&str, &OwnerEntry)> {
         self.owners.iter().map(|(k, v)| (k.as_str(), v))
@@ -526,6 +534,20 @@ mod tests {
             }
             other => panic!("expected Found, got {other:?}"),
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn issued_knows_only_the_tokens_the_table_resolves() {
+        let dir = std::env::temp_dir().join(format!("todoku-cred-issued-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "github_pat_table\n").unwrap();
+        let t = CredentialTable::from_json(&table_json(&path.to_string_lossy())).unwrap();
+        assert!(t.issued("github_pat_table"));
+        assert!(t.issued(" github_pat_table\n"));
+        assert!(!t.issued("ghs_minted_elsewhere"));
+        assert!(!t.issued(""));
         std::fs::remove_dir_all(&dir).ok();
     }
 
